@@ -316,6 +316,17 @@ class ResizeMultiview3D:
             for i in range(len(results['extrinsics']))
         ]
 
+    def _resize_bboxes(self, results):
+        """Resize bounding boxes with ``results['scale_factor']``."""
+        num_views = int(results['gt_bboxes_3d'].mtv_targets.shape[1]/4)
+        for i in range(len(results['bboxes'])):
+            results['gt_bboxes_3d'].mtv_targets[:, i*4] *= results['scale_factor'][i]
+            if self.bbox_clip_border:
+                img_shape = results['img_shape']
+                bboxes[:, 0::2] = np.clip(bboxes[:, 0::2], 0, img_shape[1])
+                bboxes[:, 1::2] = np.clip(bboxes[:, 1::2], 0, img_shape[0])
+            results['bboxes'][i] = bboxes
+
     def __call__(self, results):
         """Call function to resize images, bounding boxes, masks, semantic
         segmentation map.
@@ -338,6 +349,7 @@ class ResizeMultiview3D:
                 self._random_scale(results)
 
         self._resize_img(results)
+        self._resize_bboxes(results)
 
         return results
 
@@ -1092,6 +1104,57 @@ class ComputeMultiviewTargets(object):
         if 'gt_bboxes_3d' in results:
             results['gt_bboxes_3d'].mtv_targets = torch.as_tensor(targets_all)
             results['gt_bboxes_3d'].mtv_visibility = torch.as_tensor(masks_all)
+        results['dec_extrinsics'] = dec_extrinsics
+
+        return results
+
+@PIPELINES.register_module()
+class LoadMultiviewTargets(object):
+    """
+    Prepare the decoding view frames, and if given gt, load the multiview targets in view frames.
+    
+    """
+
+    def __init__(self,
+                 num_views=2,
+                 keyframe_only=True) -> None:
+        self.num_views = num_views
+        self.keyframe_only = keyframe_only
+
+    def __call__(self, results) -> None:
+        """
+        M boxes, N views, compute:
+        bbox targets: M x (N * 4)
+        visibility mask: M x N
+        """
+        num_targets = results['gt_bboxes_3d'].tensor.shape[0] if 'gt_bboxes_3d' in results else 0
+        num_views = self.num_views if self.keyframe_only else len(results['intrinsic'])
+
+        targets_all, masks_all, dec_extrinsics = [], [], []
+        for i in range(num_views):
+            extr = results['extrinsic'][i].copy().astype(np.float32)
+            dec_extrinsics.append(extr)
+
+            if 'gt_bboxes_3d' not in results:
+                continue
+
+            # get targets
+            targets = results['cam_instances'][i].copy().astype(extr.dtype) #(N, 4)
+            masks = results['cam_instances_valid_flags'][i].copy().astype(extr.dtype) #(N, 4)
+
+            targets_all.append(targets)
+            masks_all.append(masks)
+
+        if num_targets > 0:
+            targets_all = np.stack(targets_all).transpose(1, 0, 2).reshape(num_targets, -1)
+            masks_all = np.stack(masks_all).transpose(1, 0)
+        else:
+            targets_all = np.zeros((num_targets, num_views * 4), dtype=extr.dtype)
+            masks_all = np.zeros((num_targets), dtype=extr.dtype)
+
+        if 'gt_bboxes_3d' in results:
+            results['gt_bboxes_3d'].mtv_targets = torch.as_tensor(targets_all) #(num_targets, num_views*4)
+            results['gt_bboxes_3d'].mtv_visibility = torch.as_tensor(masks_all) #(num_targets, num_views)
         results['dec_extrinsics'] = dec_extrinsics
 
         return results

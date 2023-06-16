@@ -1,11 +1,12 @@
 _base_ = [
-    '/home/sap/VEDet/mmlab/mmdetection3d/configs/_base_/datasets/nus-3d.py',
+#    '/home/sap/VEDet/mmlab/mmdetection3d/configs/_base_/datasets/nus-3d.py',
     '/home/sap/VEDet/mmlab/mmdetection3d/configs/_base_/default_runtime.py'
 ]
 backbone_norm_cfg = dict(type='LN', requires_grad=True)
 plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
+'''
 log_config = dict(
     interval=10,
     hooks=[
@@ -17,6 +18,7 @@ log_config = dict(
             interval=10,
         )
     ])
+'''
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
@@ -27,7 +29,7 @@ img_norm_cfg = dict(mean=[103.530, 116.280, 123.675], std=[57.375, 57.120, 58.39
 # For nuScenes we usually do 10-class detection
 class_names = ['water1', 'water2', 'pepsi', 'coca1', 'coca2', 'coca3', 'coca4', 'tea1', 'tea2', 'yogurt', 'ramen1', 'ramen2', 'ramen3', 'ramen4', 'ramen5', 'ramen6', 'ramen7', 'juice1', 'juice2', 'can1', 'can2', 'can3', 'can4', 'can5', 'can6', 'can7', 'can8', 'can9', 'ham1', 'ham2', 'pack1', 'pack2', 'pack3', 'pack4', 'pack5', 'pack6', 'snack1', 'snack2', 'snack3', 'snack4', 'snack5', 'snack6', 'snack7', 'snack8', 'snack9', 'snack10', 'snack11', 'snack12', 'snack13', 'snack14', 'snack15', 'snack16', 'snack17', 'snack18', 'snack19', 'snack20', 'snack21', 'snack22', 'snack23', 'snack24', 'green_apple', 'red_apple', 'tangerine', 'lime', 'lemon', 'yellow_quince', 'green_quince', 'white_quince', 'fruit1', 'fruit2', 'peach', 'banana', 'fruit3', 'pineapple', 'fruit4', 'strawberry', 'cherry', 'red_pimento', 'green_pimento', 'carrot', 'cabbage1', 'cabbage2', 'eggplant', 'bread', 'baguette', 'sandwich', 'hamburger', 'hotdog', 'donuts', 'cake', 'onion', 'marshmallow', 'mooncake', 'shirimpsushi', 'sushi1', 'sushi2', 'big_spoon', 'small_spoon', 'fork', 'knife', 'big_plate', 'small_plate', 'bowl', 'white_ricebowl', 'blue_ricebowl', 'black_ricebowl', 'green_ricebowl', 'black_mug', 'gray_mug', 'pink_mug', 'green_mug', 'blue_mug', 'blue_cup', 'orange_cup', 'yellow_cup', 'big_wineglass', 'small_wineglass', 'glass1', 'glass2', 'glass3']
 
-input_modality = dict(use_lidar=False, use_camera=True, use_radar=False, use_map=False, use_external=False)
+#input_modality = dict(use_lidar=False, use_camera=True, use_radar=False, use_map=False, use_external=False)
 bands, max_freq = 64, 8
 num_views = 2
 code_weights = [1.0] * 10 + [0.0] * 10 * num_views
@@ -132,7 +134,7 @@ model = dict(
                 align_with_loss=True,
                 pc_range=point_cloud_range))))
 
-dataset_type = 'CustomNuScenesDataset'
+dataset_type = 'CustomMessytableDataset'
 #data_root = 'data/nuscenes/'
 data_root = 'data/Messytable/'
 
@@ -145,9 +147,9 @@ ida_aug_conf = {
     "bot_pct_lim": (0.0, 0.0),
     "rot_lim": (0.0, 0.0),
     #"H": 900,
-    "H": 900,
+    "H": 1080,
     #"W": 1600,
-    "W": 1600,
+    "W": 1920,
     "rand_flip": True,
 }
 #meta_keys = ('filename', 'ori_shape', 'img_shape', 'lidar2img', 'depth2img', 'cam2img', 'pad_shape', 'scale_factor',
@@ -155,49 +157,38 @@ ida_aug_conf = {
 #             'pcd_trans', 'sample_idx', 'pcd_scale_factor', 'pcd_rotation', 'pts_filename', 'transformation_3d_flow',
 #             'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp')
 meta_keys = ('filename', 'ori_shape', 'img_shape', 'lidar2img', 'depth2img', 'cam2img', 'pad_shape', 'scale_factor',
-             'flip', 'pcd_horizontal_flip', 'pcd_vertical_flip', 'box_mode_3d', 'box_type_3d', 'img_norm_cfg',
+             'flip', 'pcd_horizontal_flip', 'pcd_vertical_flip', 'img_norm_cfg',
              'pcd_trans', 'sample_idx', 'pcd_scale_factor', 'pcd_rotation', 'pts_filename', 'transformation_3d_flow',
              'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp')
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(
-        type='LoadMultiViewImageFromMultiSweepsFiles',
-        sweeps_num=1,
-        to_float32=True,
-        pad_empty_sweeps=True,
-        test_mode=False,
-        time_range=3,
-        sweep_range=[3, 27]),
-    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
-    dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
-    dict(type='ObjectNameFilter', classes=class_names),
-    dict(type='ResizeCropFlipImageFull3D', data_aug_conf=ida_aug_conf, training=True),
-    dict(
-        type='GlobalRotScaleTransImage',
-        rot_range=[-0.3925, 0.3925],
-        translation_std=[0, 0, 0],
-        scale_ratio_range=[0.95, 1.05],
-        reverse_angle=True,
-        training=True),
-    dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False, use_virtual=True, num_views=num_views),
+    #dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
+    #dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
+    #dict(type='ObjectNameFilter', classes=class_names),
+    #dict(type='ResizeCropFlipImageFull3D', data_aug_conf=ida_aug_conf, training=True),
+    #dict(
+    #    type='GlobalRotScaleTransImage',
+    #    rot_range=[-0.3925, 0.3925],
+    #    translation_std=[0, 0, 0],
+    #    scale_ratio_range=[0.95, 1.05],
+    #    reverse_angle=True,
+    #    training=True),
+    #dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False, use_virtual=True, num_views=num_views),
+    dict(type='LoadMultiviewTargets', num_views=num_views),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='PadMultiViewImage', size_divisor=32),
+    dict(type='ResizeMultiview3D', img_scale=(1080, 1920), scale_ratio=[.3, .4]),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img'], meta_keys=meta_keys)
 ]
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(
-        type='LoadMultiViewImageFromMultiSweepsFiles',
-        sweeps_num=1,
-        to_float32=True,
-        pad_empty_sweeps=True,
-        time_range=3,
-        sweep_range=[3, 27]),
-    dict(type='ResizeCropFlipImageFull3D', data_aug_conf=ida_aug_conf, training=False),
-    dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False),
+    #dict(type='ResizeCropFlipImageFull3D', data_aug_conf=ida_aug_conf, training=False),
+    #dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False),
+    dict(type='LoadMultiviewTargets', num_views=num_views),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='PadMultiViewImage', size_divisor=32),
+    dict(type='ResizeMultiview3D'),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1333, 800),
@@ -211,7 +202,8 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=1,
-    workers_per_gpu=4,
+    #workers_per_gpu=4,
+    workers_per_gpu=0,
     train=dict(
         type=dataset_type,
         data_root=data_root,
@@ -219,26 +211,30 @@ data = dict(
         ann_file=data_root + 'messytable_infos_train.pkl',
         pipeline=train_pipeline,
         classes=class_names,
-        modality=input_modality,
+        #modality=input_modality,
         test_mode=False,
         use_valid_flag=True,
         # we use box_type_3d='LiDAR' in kitti and nuscenes dataset
         # and box_type_3d='Depth' in sunrgbd and scannet dataset.
-        box_type_3d='LiDAR'),
+        #box_type_3d='LiDAR'
+        ),
     val=dict(
         type=dataset_type,
         pipeline=test_pipeline,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_val.pkl',
         ann_file=data_root + 'messytable_infos_val.pkl',
         classes=class_names,
-        modality=input_modality),
+        #modality=input_modality
+        ),
     test=dict(
         type=dataset_type,
         pipeline=test_pipeline,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_val.pkl',
         ann_file=data_root + 'messytable_infos_val.pkl',
         classes=class_names,
-        modality=input_modality))
+        #modality=input_modality
+        )
+    )
 
 optimizer = dict(
     type='AdamW', lr=2e-4, paramwise_cfg=dict(custom_keys={

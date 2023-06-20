@@ -10,7 +10,8 @@ from mmdet.datasets import DATASETS
 #from mmdet.core.visualization import imshow_gt_det_bboxes
 from ..core.visualization.show_result_mtv2d import show_result_mtv2d
 #from ..core.bbox import Box3DMode, Coord3DMode, LiDARInstance3DBoxes
-#from ..core.bbox import Box2DMode, Coord2DMode, LiDARInstance2DBoxes
+from mmdet3d.core.bbox import LiDARInstance3DBoxes
+#from ..core.bbox.structures.mtv_boxes2d import MtvBoxes2D
 from .custom_mtv2d import CustomMtv2DDataset
 from mmdet3d.datasets.pipelines import Compose
 
@@ -141,7 +142,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             scene_token=info['scene_token'],
             cams=info['cams'],
             valid_flags=info['valid_flags'],
-            gt_ids=info['gt_ids'],
+            gt_bboxes_3d=info['gt_ids'], 
             gt_names=info['gt_names'],
             cam_instances=info['cam_instances'],
             cam_instances_valid_flags=info['cam_instances_valid_flags'],
@@ -160,8 +161,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         input_dict.update(
             dict(
                 img_filename=image_paths,
-                intrinsic=intrinsics,
-                extrinsic=extrinsics,
+                intrinsics=intrinsics,
+                extrinsics=extrinsics,
                 world2img=world2img_rts,
             ))
 
@@ -197,10 +198,16 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                 gt_labels.append(-1)
         gt_labels = np.array(gt_labels)
 
+        gt_bboxes_3d=LiDARInstance3DBoxes(
+            np.reshape(gt_ids, (-1, 1)).astype('int'), 
+            box_dim=1, 
+            with_yaw=False)
+
         anns_results = dict(
-            gt_bboxes_3d=gt_ids,
+            gt_bboxes_3d=gt_bboxes_3d,
             gt_labels_3d=gt_labels,
             gt_names=gt_names)
+
         return anns_results
 
     def _format_bbox(self, results, jsonfile_prefix=None):

@@ -73,7 +73,7 @@ model = dict(
         code_weights=code_weights,
         reg_channels=10,
         num_decode_views=num_views,
-        with_time=True,
+        with_time=False,
         det_transformer=dict(
             type='VETransformer',
             det_decoder=dict(
@@ -162,7 +162,7 @@ meta_keys = ('filename', 'ori_shape', 'img_shape', 'lidar2img', 'depth2img', 'ca
              'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp')
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    #dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
+    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     #dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     #dict(type='ObjectNameFilter', classes=class_names),
     #dict(type='ResizeCropFlipImageFull3D', data_aug_conf=ida_aug_conf, training=True),
@@ -176,8 +176,8 @@ train_pipeline = [
     #dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False, use_virtual=True, num_views=num_views),
     dict(type='LoadMultiviewTargets', num_views=num_views),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.3, .4]),
     dict(type='PadMultiViewImage', size_divisor=32),
-    dict(type='ResizeMultiview3D', img_scale=(1080, 1920), scale_ratio=[.3, .4]),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img'], meta_keys=meta_keys)
 ]
@@ -187,8 +187,8 @@ test_pipeline = [
     #dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False),
     dict(type='LoadMultiviewTargets', num_views=num_views),
     dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.3, .4]),
     dict(type='PadMultiViewImage', size_divisor=32),
-    dict(type='ResizeMultiview3D'),
     dict(
         type='MultiScaleFlipAug3D',
         img_scale=(1333, 800),

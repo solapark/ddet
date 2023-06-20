@@ -154,6 +154,7 @@ class ResizeMultiview3D:
     """
 
     def __init__(self,
+                 num_views=2,
                  img_scale=None,
                  multiscale_mode='range',
                  ratio_range=None,
@@ -161,6 +162,7 @@ class ResizeMultiview3D:
                  bbox_clip_border=True,
                  backend='cv2',
                  override=False):
+        self.num_views = num_views
         if img_scale is None:
             self.img_scale = None
         else:
@@ -318,14 +320,14 @@ class ResizeMultiview3D:
 
     def _resize_bboxes(self, results):
         """Resize bounding boxes with ``results['scale_factor']``."""
-        num_views = int(results['gt_bboxes_3d'].mtv_targets.shape[1]/4)
-        for i in range(len(results['bboxes'])):
-            results['gt_bboxes_3d'].mtv_targets[:, i*4] *= results['scale_factor'][i]
+        for i in range(self.num_views):
+            bboxes = results['gt_bboxes_3d'].mtv_targets[:, i*4:(i+1)*4]
+            bboxes *= results['scale_factor'][i]
             if self.bbox_clip_border:
-                img_shape = results['img_shape']
+                img_shape = results['img_shape'][i]
                 bboxes[:, 0::2] = np.clip(bboxes[:, 0::2], 0, img_shape[1])
                 bboxes[:, 1::2] = np.clip(bboxes[:, 1::2], 0, img_shape[0])
-            results['bboxes'][i] = bboxes
+            results['gt_bboxes_3d'].mtv_targets[:, i*4:(i+1)*4] = bboxes
 
     def __call__(self, results):
         """Call function to resize images, bounding boxes, masks, semantic
@@ -1127,12 +1129,12 @@ class LoadMultiviewTargets(object):
         bbox targets: M x (N * 4)
         visibility mask: M x N
         """
-        num_targets = results['gt_bboxes_3d'].tensor.shape[0] if 'gt_bboxes_3d' in results else 0
-        num_views = self.num_views if self.keyframe_only else len(results['intrinsic'])
+        num_targets = len(results['gt_bboxes_3d']) if 'gt_bboxes_3d' in results else 0
+        num_views = self.num_views if self.keyframe_only else len(results['intrinsics'])
 
         targets_all, masks_all, dec_extrinsics = [], [], []
         for i in range(num_views):
-            extr = results['extrinsic'][i].copy().astype(np.float32)
+            extr = results['extrinsics'][i].copy().astype(np.float32)
             dec_extrinsics.append(extr)
 
             if 'gt_bboxes_3d' not in results:

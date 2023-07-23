@@ -320,14 +320,16 @@ class ResizeMultiview3D:
 
     def _resize_bboxes(self, results):
         """Resize bounding boxes with ``results['scale_factor']``."""
-        for i in range(self.num_views):
-            bboxes = results['gt_bboxes_3d'].mtv_targets[:, i*4:(i+1)*4]
-            bboxes *= results['scale_factor'][i]
-            if self.bbox_clip_border:
-                img_shape = results['img_shape'][i]
-                bboxes[:, 0::2] = np.clip(bboxes[:, 0::2], 0, img_shape[1])
-                bboxes[:, 1::2] = np.clip(bboxes[:, 1::2], 0, img_shape[0])
-            results['gt_bboxes_3d'].mtv_targets[:, i*4:(i+1)*4] = bboxes
+        for i in range(1, self.num_views):
+            bboxes = results['gt_bboxes_3d'].mtv_targets[:, i*9:(i+1)*9]
+            results['gt_bboxes_3d'].mtv_targets[:, i*9] *= results['scale_factor'][i][0]
+            results['gt_bboxes_3d'].mtv_targets[:, i*9+1] *= results['scale_factor'][i][1]
+            results['gt_bboxes_3d'].mtv_targets[:, i*9+3] *= results['scale_factor'][i][0]
+            results['gt_bboxes_3d'].mtv_targets[:, i*9+5] *= results['scale_factor'][i][1]
+            #if self.bbox_clip_border:
+            #    img_shape = results['img_shape'][i]
+            #    bboxes[:, 0::2] = np.clip(bboxes[:, 0::2], 0, img_shape[1])
+            #    bboxes[:, 1::2] = np.clip(bboxes[:, 1::2], 0, img_shape[0])
 
     def __call__(self, results):
         """Call function to resize images, bounding boxes, masks, semantic
@@ -1141,8 +1143,13 @@ class LoadMultiviewTargets(object):
                 continue
 
             # get targets
-            targets = results['cam_instances'][i].copy().astype(extr.dtype) #(N, 4)
-            masks = results['cam_instances_valid_flags'][i].copy().astype(extr.dtype) #(N, 4)
+            cam_instances = results['cam_instances'][i].copy().astype(extr.dtype) #(N, 4)
+            targets = np.zeros((len(cam_instances), 9)) #(N, 9)
+            targets[:, 0] =  cam_instances[:, 0] #cx
+            targets[:, 1] =  cam_instances[:, 1] #cy
+            targets[:, 3] =  cam_instances[:, 2] #w
+            targets[:, 5] =  cam_instances[:, 3] #h
+            masks = 1 - results['cam_instances_valid_flags'][i].copy().astype(np.long) #(N,), 0=visible(fg), 1=non_visible(bg)
 
             targets_all.append(targets)
             masks_all.append(masks)
@@ -1155,7 +1162,7 @@ class LoadMultiviewTargets(object):
             masks_all = np.zeros((num_targets), dtype=extr.dtype)
 
         if 'gt_bboxes_3d' in results:
-            results['gt_bboxes_3d'].mtv_targets = torch.as_tensor(targets_all) #(num_targets, num_views*4)
+            results['gt_bboxes_3d'].mtv_targets = torch.as_tensor(targets_all) #(num_targets, num_views*9)
             results['gt_bboxes_3d'].mtv_visibility = torch.as_tensor(masks_all) #(num_targets, num_views)
         results['dec_extrinsics'] = dec_extrinsics
 

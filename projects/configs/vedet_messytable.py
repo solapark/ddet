@@ -22,7 +22,7 @@ log_config = dict(
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
-point_cloud_range = [-51.2, -51.2, -5.0, 51.2, 51.2, 3.0]
+point_cloud_range = [-1.0, -1.0, -.25, 1.0, 1.0, .5]
 voxel_size = [0.2, 0.2, 8]
 img_norm_cfg = dict(mean=[103.530, 116.280, 123.675], std=[57.375, 57.120, 58.395], to_rgb=False)
 
@@ -32,21 +32,25 @@ class_names = ['water1', 'water2', 'pepsi', 'coca1', 'coca2', 'coca3', 'coca4', 
 #input_modality = dict(use_lidar=False, use_camera=True, use_radar=False, use_map=False, use_external=False)
 bands, max_freq = 64, 8
 num_views = 2
-code_weights = [1.0] * 10 + [0.0] * 10 * num_views
-code_weights[8] = 0.2
-code_weights[9] = 0.2
-virtual_weights = 0.2
+num_classes = len(class_names)
+pred_size = 10 #cx, cy, cw, w, l, h, sin_rot, cos_rot, vx, vy
+#code_weights = [1.0] * 10 + [0.0] * 10 * num_views
+code_weights = [0.0] * pred_size + [0.0] * pred_size * num_views
+#code_weights[8] = 0.2
+#code_weights[9] = 0.2
+#virtual_weights = 0.2
+virtual_weights = 1.0
 for i in range(1, num_views + 1):
-    code_weights[i * 10] = virtual_weights  # x
-    code_weights[i * 10 + 1] = virtual_weights  # y
-    code_weights[i * 10 + 4] = virtual_weights  # z
-    code_weights[i * 10 + 6] = virtual_weights  # sin(yaw)
-    code_weights[i * 10 + 7] = virtual_weights  # cos(yaw)
-    code_weights[i * 10 + 2] = virtual_weights  # w
-    code_weights[i * 10 + 3] = virtual_weights  # l
-    code_weights[i * 10 + 5] = virtual_weights  # h
-    code_weights[i * 10 + 8] = 0.2 * virtual_weights  # vx
-    code_weights[i * 10 + 9] = 0.2 * virtual_weights  # vy
+    code_weights[i * pred_size] = virtual_weights  # x
+    code_weights[i * pred_size + 1] = virtual_weights  # y
+    #code_weights[i * 10 + 4] = virtual_weights  # z
+    #code_weights[i * 10 + 6] = virtual_weights  # sin(yaw)
+    #code_weights[i * 10 + 7] = virtual_weights  # cos(yaw)
+    code_weights[i * pred_size + 2] = virtual_weights  # w
+    #code_weights[i * 10 + 3] = virtual_weights  # l
+    code_weights[i * pred_size + 5] = virtual_weights  # h
+    #code_weights[i * 10 + 8] = 0.2 * virtual_weights  # vx
+    #code_weights[i * 10 + 9] = 0.2 * virtual_weights  # vy
 model = dict(
     type='VEDet',
     use_grid_mask=True,
@@ -63,8 +67,9 @@ model = dict(
     img_neck=dict(type='CPFPN', in_channels=[768, 1024], out_channels=256, num_outs=2),
     gt_depth_sup=False,  # use cache to supervise
     pts_bbox_head=dict(
-        type='VEDetHead',
-        num_classes=10,
+        type='TMVDetHead',
+        pred_size=pred_size,
+        num_classes=num_classes,
         in_channels=256,
         num_query=900,
         position_range=point_cloud_range,
@@ -75,7 +80,8 @@ model = dict(
         num_decode_views=num_views,
         with_time=False,
         det_transformer=dict(
-            type='VETransformer',
+            #type='VETransformer',
+            type='TMvdetTransformer',
             det_decoder=dict(
                 type='PETRTransformerDecoder',
                 return_intermediate=True,
@@ -97,7 +103,7 @@ model = dict(
             pc_range=point_cloud_range,
             max_num=300,
             voxel_size=voxel_size,
-            num_classes=10),
+            num_classes=num_classes),
         input_ray_encoding=dict(
             type='FourierMLPEncoding',
             input_channels=10,
@@ -115,6 +121,7 @@ model = dict(
             fourier_channels=10 * 2 * bands,
             max_frequency=max_freq),
         loss_cls=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
+        loss_visible=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         loss_bbox=dict(type='L1Loss', loss_weight=0.25),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0),
     ),
@@ -126,9 +133,11 @@ model = dict(
             point_cloud_range=point_cloud_range,
             out_size_factor=4,
             assigner=dict(
-                type='HungarianAssigner3D',
+                #type='HungarianAssigner3D',
+                type='HungarianAssignerMtv2D',
                 cls_cost=dict(type='FocalLossCost', weight=2.0),
-                reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
+                #reg_cost=dict(type='BBox3DL1Cost', weight=0.25),
+                reg_cost=dict(type='BBoxMtv2DL1Cost', weight=0.25, pred_size=pred_size, num_views=num_views),
                 iou_cost=dict(type='IoUCost',
                               weight=0.0),  # Fake cost. This is just to make it compatible with DETR head. 
                 align_with_loss=True,
@@ -175,7 +184,7 @@ train_pipeline = [
     #    training=True),
     #dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False, use_virtual=True, num_views=num_views),
     dict(type='LoadMultiviewTargets', num_views=num_views),
-    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    #dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.3, .4]),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(type='DefaultFormatBundle3D', class_names=class_names),

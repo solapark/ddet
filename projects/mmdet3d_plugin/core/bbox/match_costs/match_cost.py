@@ -70,8 +70,8 @@ class BBoxMtv2DL1Cost(object):
             cur_gt_bboxes = gt_bboxes[i][visible_mask][:,  [0,1,2,5]].reshape(1, -1) #(1, num_valid_views*4)
             cur_bbox_pred = bbox_pred[:, visible_mask][:, :, [0,1,2,5]].reshape(num_pred, -1) #(900, num_valid_views*4)
 
-            bbox_cost = torch.cdist(cur_bbox_pred, cur_gt_bboxes, p=1) #(900, 1)
+            bbox_cost = torch.cdist(cur_bbox_pred, cur_gt_bboxes, p=1).squeeze(-1) #(900, )
             bbox_cost_list.append(bbox_cost)
 
-        bbox_cost = torch.stack([bbox_cost_list, num_gt], -1) #(num_pred, num_gt)
+        bbox_cost = torch.stack(bbox_cost_list, -1) #(num_pred, num_gt)
         return bbox_cost * self.weight

@@ -29,12 +29,13 @@ class TMvdetTransformer(VETransformer):
             Defaults to None.
     """
 
-    def decode_bboxes(self, init_det_points, init_det_points_mtv, memory, key_pos, mask, attn_masks, pos3d_encoder, pos2d_encoder,
+    def decode_bboxes(self, init_det_points, init_det_points_mtv, memory, key_pos, mask, attn_masks, pos_encoder,
                       reg_branch, num_decode_views):
+        pos3d_encoder, pos2d_encoder = pos_encoder
         B, V, Q, C = init_det_points_mtv.shape
         if init_det_points_mtv is not None:
             # append queries from virtual views
-            #query_points = torch.cat([init_det_points, init_det_points_mtv], dim=1).flatten(1, 2)
+            query_points = torch.cat([init_det_points, init_det_points_mtv], dim=1).flatten(1, 2)
             query_points_3d = init_det_points.flatten(1, 2) #(1, 900, 10)
             query_points_2d = init_det_points_mtv.flatten(1, 2) #(1, 900*num_views, 10)
             query_embeds3d = pos3d_encoder(query_points_3d).reshape(B, 1, Q, -1) #(1, 1, 900, 256)
@@ -66,7 +67,8 @@ class TMvdetTransformer(VETransformer):
         for reg_brch, output in zip(reg_branch, det_outputs):
 
             reg = reg_brch(output)
-            reference = inverse_sigmoid(query_points[..., :3].clone())
+            #reference = inverse_sigmoid(query_points[..., :3].clone())
+            reference = query_points[..., :3].clone()
             reg[..., 0:2] += reference[..., 0:2] #cx, cy
             reg[..., 0:2] = reg[..., 0:2].sigmoid()
             reg[..., 4:5] += reference[..., 2:3] #cz

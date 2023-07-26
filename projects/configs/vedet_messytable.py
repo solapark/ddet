@@ -218,6 +218,7 @@ data = dict(
         data_root=data_root,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_train.pkl',
         ann_file=data_root + 'messytable_infos_train.pkl',
+        #ann_file=data_root + 'messytable_infos_debug.pkl',
         pipeline=train_pipeline,
         classes=class_names,
         #modality=input_modality,

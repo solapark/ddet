@@ -320,12 +320,12 @@ class ResizeMultiview3D:
 
     def _resize_bboxes(self, results):
         """Resize bounding boxes with ``results['scale_factor']``."""
-        for i in range(1, self.num_views):
+        for i in range(self.num_views):
             bboxes = results['gt_bboxes_3d'].mtv_targets[:, i*9:(i+1)*9]
-            results['gt_bboxes_3d'].mtv_targets[:, i*9] *= results['scale_factor'][i][0]
-            results['gt_bboxes_3d'].mtv_targets[:, i*9+1] *= results['scale_factor'][i][1]
-            results['gt_bboxes_3d'].mtv_targets[:, i*9+3] *= results['scale_factor'][i][0]
-            results['gt_bboxes_3d'].mtv_targets[:, i*9+5] *= results['scale_factor'][i][1]
+            results['gt_bboxes_3d'].mtv_targets[:, i*9] *= results['scale_factor'][i][0] #x
+            results['gt_bboxes_3d'].mtv_targets[:, i*9+1] *= results['scale_factor'][i][1] #y
+            results['gt_bboxes_3d'].mtv_targets[:, i*9+3] *= results['scale_factor'][i][0] #w
+            results['gt_bboxes_3d'].mtv_targets[:, i*9+5] *= results['scale_factor'][i][1] #h
             #if self.bbox_clip_border:
             #    img_shape = results['img_shape'][i]
             #    bboxes[:, 0::2] = np.clip(bboxes[:, 0::2], 0, img_shape[1])
@@ -1144,7 +1144,7 @@ class LoadMultiviewTargets(object):
 
             # get targets
             cam_instances = results['cam_instances'][i].copy().astype(extr.dtype) #(N, 4)
-            targets = np.zeros((len(cam_instances), 9)) #(N, 9)
+            targets = np.zeros((len(cam_instances), 9), np.float32) #(N, 9)
             targets[:, 0] =  cam_instances[:, 0] #cx
             targets[:, 1] =  cam_instances[:, 1] #cy
             targets[:, 3] =  cam_instances[:, 2] #w

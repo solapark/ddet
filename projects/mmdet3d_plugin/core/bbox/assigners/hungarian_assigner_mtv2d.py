@@ -111,11 +111,13 @@ class HungarianAssignerMtv2D(BaseAssigner):
         # classification and bboxcost.
         cls_cost = self.cls_cost(cls_pred, gt_labels)
         # visible_cost.
-        visible_cost = self.visible_cost(visible_pred, gt_visibles)
+        visible_cost = self.visible_cost(visible_pred, gt_visibles) #(900, 50, 2)
+        visible_cost = torch.mean(visible_cost, -1) #(900, 50)
         # regression L1 cost
         normalized_gt_bboxes = normalize_bbox(gt_bboxes, self.pc_range)
         if self.align_with_loss:
             normalized_gt_bboxes = normalized_gt_bboxes * code_weights
+            normalized_gt_bboxes = torch.nan_to_num(normalized_gt_bboxes)
             bbox_pred = bbox_pred * code_weights
             #reg_cost = self.reg_cost(bbox_pred, normalized_gt_bboxes)
             reg_cost = self.reg_cost(bbox_pred, normalized_gt_bboxes, 1-gt_visibles)

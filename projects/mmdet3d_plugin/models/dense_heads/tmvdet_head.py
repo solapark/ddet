@@ -219,6 +219,7 @@ class TMVDetHead(VEDetHead):
             pass
 
         self.loss_visible = build_loss(loss_visible) if loss_visible else None
+        self.pred_size = pred_size
         '''
         if self.loss_visible is not None and self.loss_visible.use_sigmoid:
             self.visible_out_channels = 1
@@ -295,7 +296,7 @@ class TMVDetHead(VEDetHead):
             det_outputs, regs, seg_outputs = self.det_transformer(feats, masks, pos_embeds, init_det_points,
                                                                   init_det_points_mtv, init_seg_points,
                                                                   #self.output_det_encoding, self.output_seg_encoding,
-                                                                  self.output_det_encoding, self.output_det_2d_encoding, self.output_seg_encoding,
+                                                                  [self.output_det_encoding, self.output_det_2d_encoding], self.output_seg_encoding,
                                                                   self.reg_branch, num_decode_views)
 
             # detection from queries
@@ -395,10 +396,10 @@ class TMVDetHead(VEDetHead):
         #bbox_weights[pos_inds] = 1.0
 
         num_pos = len(pos_inds) #21
-        bbox_loss_mask_view0 = torch.zeors((num_pos, 1)) #(21, 1) 
         bbox_loss_mask = 1 - visible_targets[pos_inds] #(21, 2)
-        bbox_loss_mask = torch.statck([bbox_loss_mask_view0, bbox_loss_mask], -1) #(21, 3)
-        bbox_weights[pos_inds] = bbox_loss_mask.repeat(1, 1, self.pred_size).reshape(num_pos, -1) #(21, 30)
+        bbox_loss_mask_view0 = torch.zeros((num_pos, 1)).to(bbox_loss_mask.device) #(21, 1) 
+        bbox_loss_mask = torch.cat([bbox_loss_mask_view0, bbox_loss_mask], -1) #(21, 3)
+        bbox_weights[pos_inds] = bbox_loss_mask[:, :, None].repeat(1, 1, self.pred_size).reshape(num_pos, -1) #(21, 30)
 
         # print(gt_bboxes.size(), bbox_pred.size())
         # DETR
@@ -483,10 +484,8 @@ class TMVDetHead(VEDetHead):
             cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
             visible_scores_list = [visible_scores[i] for i in range(num_imgs)]
             bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
-            cls_visible_reg_targets = self.get_targets(cls_scores_list, visible_scores_list, bbox_preds_list, gt_bboxes_list, gt_labels_list, gt_visibles_list,
-                                               gt_bboxes_ignore_list)
-            (labels_list, label_weights_list, visibles_list, visible_weights_list, bbox_targets_list, bbox_weights_list, num_total_pos,
-             num_total_neg) = cls_visible_reg_targets
+            cls_visible_reg_targets = self.get_targets(cls_scores_list, visible_scores_list, bbox_preds_list, gt_bboxes_list, gt_labels_list, gt_visibles_list, gt_bboxes_ignore_list)
+            (labels_list, label_weights_list, visibles_list, visible_weights_list, bbox_targets_list, bbox_weights_list, num_total_pos, num_total_neg) = cls_visible_reg_targets
             labels = torch.cat(labels_list, 0)
             label_weights = torch.cat(label_weights_list, 0)
             visibles = torch.cat(visibles_list, 0)
@@ -516,7 +515,7 @@ class TMVDetHead(VEDetHead):
                 visible_cls_avg_factor = reduce_mean(visible_scores.new_tensor([visible_cls_avg_factor]))
 
             visible_cls_avg_factor = max(visible_cls_avg_factor, 1)
-            loss_visible = self.loss_visible(visible_scores, visibles, visible_weights, avg_factor=visible_cls_avg_factor)
+            loss_visible = self.loss_visible(visible_scores.reshape(-1,1), visibles.reshape(-1,), visible_weights.reshape(-1,), avg_factor=visible_cls_avg_factor)
 
             # Compute the average number of gt boxes accross all gpus, for
             # normalization purposes
@@ -526,9 +525,12 @@ class TMVDetHead(VEDetHead):
             # regression L1 loss
             bbox_preds = bbox_preds.reshape(-1, bbox_preds.size(-1))
             normalized_bbox_targets = normalize_bbox(bbox_targets, self.pc_range)
-            isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
+            valid_code_idx = torch.where(self.code_weights>0)[0]
+            #isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
+            isnotnan = torch.isfinite(normalized_bbox_targets[:, valid_code_idx]).all(dim=-1)
             #bbox_weights = bbox_weights * self.code_weights 
             bbox_weights = bbox_weights * self.code_weights 
+            normalized_bbox_targets = torch.nan_to_num(normalized_bbox_targets)
 
             loss_bbox = self.loss_bbox(
                 bbox_preds[isnotnan],
@@ -681,29 +683,33 @@ class TMVDetHead(VEDetHead):
         if len(img_metas[0].get('dec_extrinsics', [])) == 0:
             return None
 
-        intrinsics = init_det_points_mtv.new_tensor([img_meta['intrinsics'] for img_meta in img_metas])
-        B, N = intrinsics.shape[:2]
-        M = init_det_points_mtv.shape[2]
+        intrinsics = init_det_points_mtv.new_tensor([img_meta['intrinsics'] for img_meta in img_metas]) #(1, 9, 4, 4)
+        B, V, M = init_det_points_mtv.shape[:3] # = 1, 2, 900 #(1, 2, 900, 3)
+        intrinsics = intrinsics[:, :V, :3, :3] #(1, 2, 3, 3)
 
         # bring back to metric values
         rg = self.pc_range
-        divider = torch.tensor([rg[3] - rg[0], rg[4] - rg[1], rg[5] - rg[2]], device=intrinsics.device)
-        subtract = torch.tensor([rg[0], rg[1], rg[2]], device=intrinsics.device)
+        divider = torch.tensor([rg[3] - rg[0], rg[4] - rg[1], rg[5] - rg[2]], device=intrinsics.device) #=[2.0, 2.0, .75]
+        subtract = torch.tensor([rg[0], rg[1], rg[2]], device=intrinsics.device) #=[-1.0, -1.0, -.25]
         init_det_points_mtv = init_det_points_mtv * divider + subtract
 
         # (B, N, M, 3)
-        init_det_points_mtv = init_det_points_mtv.repeat(1, N, 1, 1)
+        #init_det_points_mtv = init_det_points_mtv.repeat(1, N, 1, 1)
         #Rt = extrinsics[:, :, None, :3, :3].transpose(-1, -2).repeat(1, 1, M, 1, 1)
-        K = intrinsics[:, :, None, :, :].repeat(1, 1, M, 1, 1)
+        K = intrinsics[:, :, None, :, :].repeat(1, 1, M, 1, 1) #(1, 2, 900, 3, 3)
         init_det_points_mtv = torch.matmul(K, init_det_points_mtv[..., None]).squeeze(-1)
+        init_det_points_mtv = init_det_points_mtv / init_det_points_mtv[:,:,:,-1:] #(1, 2, 900, 3)
 
         # bring back to metric values
-        H, W, _ = img_metas[0].get('pad_shape', [])
-        img_divider = torch.tensor([W, H], device=extrinsics.device)
-        img_subtract = torch.tensor([0, 0], device=extrinsics.device)
+        pad_shape = img_metas[0].get('pad_shape', [])[:V] 
+        pad_shape = torch.Tensor(pad_shape).to(intrinsics.device) #(2, 3) =(V, HWC)
+        H, W, dummy = pad_shape.transpose(0, 1)
+        dummy[:] = 1
+        pad_shape = torch.stack([W, H, dummy]).transpose(0, 1) #(2, 3) =(V, WH1)
+        pad_shape = pad_shape[None, :, None, :].repeat(B, 1, M, 1) #(1, 2, 900, 3)
 
         # normalize
-        init_det_points_mtv = (init_det_points_mtv - img_subtract) / (img_divider + 1e-6)
+        init_det_points_mtv /= pad_shape
 
         return init_det_points_mtv
 

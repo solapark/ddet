@@ -6,9 +6,17 @@ backbone_norm_cfg = dict(type='LN', requires_grad=True)
 plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
+log_config = dict(
+    interval=1,
+    hooks=[
+        dict(type='TextLoggerHook'),
+        dict(type='TensorboardLoggerHook')
+    ]
+)
+
 '''
 log_config = dict(
-    interval=10,
+    interval=1,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook'),
@@ -17,7 +25,8 @@ log_config = dict(
             init_kwargs={'project': 'mmdet3d'},
             interval=10,
         )
-    ])
+    ]
+)
 '''
 
 # If point cloud range is changed, the models should also change their point
@@ -122,7 +131,7 @@ model = dict(
             max_frequency=max_freq),
         loss_cls=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         loss_visible=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
-        loss_bbox=dict(type='L1Loss', loss_weight=0.25),
+        loss_bbox=dict(type='L1Loss', loss_weight=0.25/50),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0),
     ),
     # model training and testing settings
@@ -195,7 +204,7 @@ test_pipeline = [
     #dict(type='ResizeCropFlipImageFull3D', data_aug_conf=ida_aug_conf, training=False),
     #dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False),
     dict(type='LoadMultiviewTargets', num_views=num_views),
-    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    #dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.3, .4]),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(
@@ -217,8 +226,8 @@ data = dict(
         type=dataset_type,
         data_root=data_root,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_train.pkl',
-        ann_file=data_root + 'messytable_infos_train.pkl',
-        #ann_file=data_root + 'messytable_infos_debug.pkl',
+        #ann_file=data_root + 'messytable_infos_train.pkl',
+        ann_file=data_root + 'messytable_infos_debug.pkl',
         pipeline=train_pipeline,
         classes=class_names,
         #modality=input_modality,

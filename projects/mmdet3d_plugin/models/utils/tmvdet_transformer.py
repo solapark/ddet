@@ -67,8 +67,7 @@ class TMvdetTransformer(VETransformer):
         for reg_brch, output in zip(reg_branch, det_outputs):
 
             reg = reg_brch(output)
-            #reference = inverse_sigmoid(query_points[..., :3].clone())
-            reference = query_points[..., :3].clone()
+            reference = inverse_sigmoid(query_points[..., :3].clone())
             reg[..., 0:2] += reference[..., 0:2] #cx, cy
             reg[..., 0:2] = reg[..., 0:2].sigmoid()
             reg[..., 4:5] += reference[..., 2:3] #cz

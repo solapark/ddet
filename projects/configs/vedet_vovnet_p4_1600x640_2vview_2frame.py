@@ -6,6 +6,7 @@ backbone_norm_cfg = dict(type='LN', requires_grad=True)
 plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
+'''
 log_config = dict(
     interval=10,
     hooks=[
@@ -17,6 +18,7 @@ log_config = dict(
             interval=10,
         )
     ])
+'''
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
@@ -206,7 +208,7 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=1,
-    workers_per_gpu=4,
+    workers_per_gpu=0,
     train=dict(
         type=dataset_type,
         data_root=data_root,
@@ -251,7 +253,7 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 24
-evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'])
+evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], show=True, out_dir='/data3/sap/VEDet/result')
 checkpoint_config = dict(interval=24)
 find_unused_parameters = False
 

@@ -110,9 +110,16 @@ class HungarianAssignerMtv2D(BaseAssigner):
         # 2. compute the weighted costs
         # classification and bboxcost.
         cls_cost = self.cls_cost(cls_pred, gt_labels)
+
         # visible_cost.
-        visible_cost = self.visible_cost(visible_pred, gt_visibles) #(900, 50, 2)
-        visible_cost = torch.mean(visible_cost, -1) #(900, 50)
+        #visible_cost = []
+        #for i in range(gt_visibles.shape[-1]):
+        #    v_cost = self.visible_cost(visible_pred[:, i:i+1], gt_visibles[:, i]) #(900, 50)
+        #    visible_cost.append(v_cost)
+        #visible_cost = torch.mean(torch.stack(visible_cost), 0) #(2, 900, 50) -> #(900, 50)
+            
+        #visible_cost = self.visible_cost(visible_pred, gt_visibles) #(900, 50, 2)
+        #visible_cost = torch.mean(visible_cost, -1) #(900, 50)
         # regression L1 cost
         normalized_gt_bboxes = normalize_bbox(gt_bboxes, self.pc_range)
         if self.align_with_loss:
@@ -126,7 +133,8 @@ class HungarianAssignerMtv2D(BaseAssigner):
             reg_cost = self.reg_cost(bbox_pred[:, :8], normalized_gt_bboxes[:, :8], 1-gt_visibles)
 
         # weighted sum of above tree costs
-        cost = cls_cost + reg_cost + visible_cost
+        #cost = cls_cost + reg_cost + visible_cost
+        cost = cls_cost + reg_cost
 
         # 3. do Hungarian matching on CPU using linear_sum_assignment
         cost = cost.detach().cpu()

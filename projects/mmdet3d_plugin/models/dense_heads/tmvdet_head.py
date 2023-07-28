@@ -266,6 +266,7 @@ class TMVDetHead(VEDetHead):
                 head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
                 Shape [nb_dec, bs, num_query, 9].
         """
+        print(img_metas[0]['filename'])
         batch_size, num_cams = mlvl_feats[0].shape[:2]
         input_img_h, input_img_w, _ = img_metas[0]['pad_shape'][0]
         masks_full = mlvl_feats[0].new_ones((batch_size, num_cams, input_img_h, input_img_w))
@@ -507,7 +508,7 @@ class TMVDetHead(VEDetHead):
             # visible loss
             visible_scores = visible_scores.reshape(-1, self.num_decode_views) #(900, 2)
             # construct weighted avg_factor to match with the official DETR repo
-            num_total_pos_visible = visibles.sum() # 39
+            num_total_pos_visible = (1-visibles).sum() # 39
             num_total_neg_visible = num_total_pos * self.num_decode_views - num_total_pos_visible # 21*2 - 39
             visible_cls_avg_factor = num_total_pos_visible * 1.0 + \
                 num_total_neg_visible * self.bg_cls_weight
@@ -530,7 +531,7 @@ class TMVDetHead(VEDetHead):
             isnotnan = torch.isfinite(normalized_bbox_targets[:, valid_code_idx]).all(dim=-1)
             #bbox_weights = bbox_weights * self.code_weights 
             bbox_weights = bbox_weights * self.code_weights 
-            normalized_bbox_targets = torch.nan_to_num(normalized_bbox_targets)
+            normalized_bbox_targets = torch.nan_to_num(normalized_bbox_targets, nan=0, posinf=0, neginf=0)
 
             loss_bbox = self.loss_bbox(
                 bbox_preds[isnotnan],
@@ -541,6 +542,9 @@ class TMVDetHead(VEDetHead):
             loss_cls = torch.nan_to_num(loss_cls)
             loss_visible = torch.nan_to_num(loss_visible)
             loss_bbox = torch.nan_to_num(loss_bbox)
+            print(torch.abs(bbox_preds[isnotnan][0] - normalized_bbox_targets[isnotnan][0]))
+            print('loss_cls', loss_cls, 'loss_visible', loss_visible, 'loss_bbox', loss_bbox)
+            print('')
 
         if seg_preds is not None:
             loss_seg = self.loss_seg(seg_preds, gt_seg_list[0])

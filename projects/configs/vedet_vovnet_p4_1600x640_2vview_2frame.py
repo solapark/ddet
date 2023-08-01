@@ -253,7 +253,8 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 24
-evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], show=True, out_dir='/data3/sap/VEDet/result')
+#evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], show=True, out_dir='/data3/sap/VEDet/result')
+evaluation = dict(interval=1, pipeline=test_pipeline, metric=['bbox'], show=True, out_dir='/data3/sap/VEDet/result')
 checkpoint_config = dict(interval=24)
 find_unused_parameters = False
 

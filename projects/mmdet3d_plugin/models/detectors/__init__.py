@@ -8,5 +8,6 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # ------------------------------------------------------------------------
 from .vedet import VEDet
+from .tmvdet import TMVDet
 
-__all__ = ['VEDet']
+__all__ = ['VEDet', 'TMVDet']

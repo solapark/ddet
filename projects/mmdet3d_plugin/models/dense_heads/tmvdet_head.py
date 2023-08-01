@@ -266,7 +266,7 @@ class TMVDetHead(VEDetHead):
                 head with normalized coordinate format (cx, cy, w, l, cz, h, theta, vx, vy). \
                 Shape [nb_dec, bs, num_query, 9].
         """
-        print(img_metas[0]['filename'])
+        #print(img_metas[0]['filename'])
         batch_size, num_cams = mlvl_feats[0].shape[:2]
         input_img_h, input_img_w, _ = img_metas[0]['pad_shape'][0]
         masks_full = mlvl_feats[0].new_ones((batch_size, num_cams, input_img_h, input_img_w))
@@ -542,9 +542,9 @@ class TMVDetHead(VEDetHead):
             loss_cls = torch.nan_to_num(loss_cls)
             loss_visible = torch.nan_to_num(loss_visible)
             loss_bbox = torch.nan_to_num(loss_bbox)
-            print(torch.abs(bbox_preds[isnotnan][0] - normalized_bbox_targets[isnotnan][0]))
-            print('loss_cls', loss_cls, 'loss_visible', loss_visible, 'loss_bbox', loss_bbox)
-            print('')
+            #print(torch.abs(bbox_preds[isnotnan][0] - normalized_bbox_targets[isnotnan][0]))
+            #print('loss_cls', loss_cls, 'loss_visible', loss_visible, 'loss_bbox', loss_bbox)
+            #print('')
 
         if seg_preds is not None:
             loss_seg = self.loss_seg(seg_preds, gt_seg_list[0])
@@ -681,8 +681,8 @@ class TMVDetHead(VEDetHead):
         return loss_dict
 
     def get_mtv_points_img(self, init_det_points_mtv, img_metas):
-        if not self.training:
-            return None
+        #if not self.training:
+        #    return None
 
         if len(img_metas[0].get('dec_extrinsics', [])) == 0:
             return None
@@ -717,4 +717,57 @@ class TMVDetHead(VEDetHead):
 
         return init_det_points_mtv
 
+    def get_mtv_points_local(self, init_det_points, img_metas):
+        # Same as vedet_haed.py except for the below two rows.
 
+        #if not self.training:
+        #    return None
+
+        if len(img_metas[0].get('dec_extrinsics', [])) == 0:
+            return None
+
+        extrinsics = init_det_points.new_tensor([img_meta['dec_extrinsics'] for img_meta in img_metas])
+        B, N = extrinsics.shape[:2]
+        M = init_det_points.shape[2]
+
+        # bring back to metric values
+        rg = self.pc_range
+        divider = torch.tensor([rg[3] - rg[0], rg[4] - rg[1], rg[5] - rg[2]], device=extrinsics.device)
+        subtract = torch.tensor([rg[0], rg[1], rg[2]], device=extrinsics.device)
+        init_det_points = init_det_points * divider + subtract
+
+        # (B, N, M, 3)
+        init_det_points_mtv = init_det_points.repeat(1, N, 1, 1)
+        init_det_points_mtv = init_det_points_mtv - extrinsics[:, :, None, :3, 3]
+        Rt = extrinsics[:, :, None, :3, :3].transpose(-1, -2).repeat(1, 1, M, 1, 1)
+        init_det_points_mtv = torch.matmul(Rt, init_det_points_mtv[..., None]).squeeze(-1)
+
+        # normalize
+        init_det_points_mtv = (init_det_points_mtv - subtract) / (divider + 1e-6)
+
+        return init_det_points_mtv
+
+    @force_fp32(apply_to=('preds_dicts'))
+    def get_bboxes(self, preds_dicts, img_metas, rescale=False):
+        """Generate bboxes from bbox head predictions.
+        Args:
+            preds_dicts (tuple[list[dict]]): Prediction results.
+            img_metas (list[dict]): Point cloud and image's meta info.
+        Returns:
+            list[dict]: Decoded bbox, scores and labels after nms.
+        """
+        preds_dicts['all_bbox_preds'] = preds_dicts['all_bbox_preds'][..., :10]
+        preds_dicts = self.bbox_coder.decode(preds_dicts)
+        num_samples = len(preds_dicts)
+
+        ret_list = []
+        for i in range(num_samples):
+            preds = preds_dicts[i]
+            bboxes = preds['bboxes']
+            bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
+            #bboxes = img_metas[i]['box_type_3d'](bboxes, bboxes.size(-1))
+            visibles = preds['visibles']
+            scores = preds['scores']
+            labels = preds['labels']
+            ret_list.append([bboxes, visibles, scores, labels])
+        return ret_list

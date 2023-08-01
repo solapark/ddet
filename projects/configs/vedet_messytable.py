@@ -7,7 +7,7 @@ plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
 log_config = dict(
-    interval=1,
+    interval=10,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
@@ -61,7 +61,8 @@ for i in range(1, num_views + 1):
     #code_weights[i * 10 + 8] = 0.2 * virtual_weights  # vx
     #code_weights[i * 10 + 9] = 0.2 * virtual_weights  # vy
 model = dict(
-    type='VEDet',
+    #type='VEDet',
+    type='TMVDet',
     use_grid_mask=True,
     img_backbone=dict(
         type='VoVNetCP',
@@ -107,8 +108,9 @@ model = dict(
                     operation_order=('self_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')),
             )),
         bbox_coder=dict(
-            type='NMSFreeCoder',
-            post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
+            #type='NMSFreeCoder',
+            type='TMVDetNMSFreeCoder',
+            #post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
             pc_range=point_cloud_range,
             max_num=300,
             voxel_size=voxel_size,
@@ -201,6 +203,7 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
+    dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     #dict(type='ResizeCropFlipImageFull3D', data_aug_conf=ida_aug_conf, training=False),
     #dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False),
     dict(type='LoadMultiviewTargets', num_views=num_views),
@@ -216,18 +219,21 @@ test_pipeline = [
             dict(type='DefaultFormatBundle3D', class_names=class_names, with_label=False),
             dict(type='Collect3D', keys=['img'], meta_keys=meta_keys)
         ])
+
 ]
+
 
 data = dict(
     samples_per_gpu=1,
     #workers_per_gpu=4,
-    workers_per_gpu=0,
+    #workers_per_gpu=0,
+    workers_per_gpu=4,
     train=dict(
         type=dataset_type,
         data_root=data_root,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_train.pkl',
-        #ann_file=data_root + 'messytable_infos_train.pkl',
-        ann_file=data_root + 'messytable_infos_debug.pkl',
+        ann_file=data_root + 'messytable_infos_train.pkl',
+        #ann_file=data_root + 'messytable_infos_debug.pkl',
         pipeline=train_pipeline,
         classes=class_names,
         #modality=input_modality,

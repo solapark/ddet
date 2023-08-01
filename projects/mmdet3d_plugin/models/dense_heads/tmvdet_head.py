@@ -756,7 +756,7 @@ class TMVDetHead(VEDetHead):
         Returns:
             list[dict]: Decoded bbox, scores and labels after nms.
         """
-        preds_dicts['all_bbox_preds'] = preds_dicts['all_bbox_preds'][..., :10]
+        #preds_dicts['all_bbox_preds'] = preds_dicts['all_bbox_preds'][..., :10]
         preds_dicts = self.bbox_coder.decode(preds_dicts)
         num_samples = len(preds_dicts)
 
@@ -764,7 +764,7 @@ class TMVDetHead(VEDetHead):
         for i in range(num_samples):
             preds = preds_dicts[i]
             bboxes = preds['bboxes']
-            bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
+            #bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
             #bboxes = img_metas[i]['box_type_3d'](bboxes, bboxes.size(-1))
             visibles = preds['visibles']
             scores = preds['scores']

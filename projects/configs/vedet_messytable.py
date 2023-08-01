@@ -225,9 +225,8 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=1,
-    #workers_per_gpu=4,
-    #workers_per_gpu=0,
     workers_per_gpu=4,
+    #workers_per_gpu=0,
     train=dict(
         type=dataset_type,
         data_root=data_root,
@@ -248,6 +247,7 @@ data = dict(
         pipeline=test_pipeline,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_val.pkl',
         ann_file=data_root + 'messytable_infos_val.pkl',
+        #ann_file=data_root + 'messytable_infos_debug.pkl',
         classes=class_names,
         #modality=input_modality
         ),
@@ -278,7 +278,8 @@ lr_config = dict(
 )
 total_epochs = 24
 evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'])
-checkpoint_config = dict(interval=24)
+#checkpoint_config = dict(interval=24)
+checkpoint_config = dict(interval=2)
 find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)

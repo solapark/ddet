@@ -5,6 +5,7 @@ import pyquaternion
 import tempfile
 from nuscenes.utils.data_classes import Box as NuScenesBox
 from os import path as osp
+import torch
 
 from mmdet.datasets import DATASETS
 #from mmdet.core.visualization import imshow_gt_det_bboxes
@@ -237,10 +238,10 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             for i, box in enumerate(boxes):
                 messytable_anno = dict(
                     scene_id=scene_id,
-                    camera_instances=box.box,
-                    camera_instances_valid_flag=box.valid_flag,
-                    detection_name=mapped_class_names[box.label],
-                    detection_score=box.score,
+                    camera_instances=box['boxes'],
+                    camera_instances_valid_flag=box['valid'],
+                    detection_name=mapped_class_names[box['label']],
+                    detection_score=box['score'],
                     )
                 annos.append(messytable_anno)
             messytable_annos[scene_id] = annos
@@ -271,7 +272,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         Returns:
             dict: Dictionary of evaluation details.
         """
-        from core.evaluation.messytable_eval import MessytableEval
+        from ..core.evaluation.messytable_eval import MessytableEval
 
         output_dir = osp.join(*osp.split(result_path)[:-1])
         messytable_eval = MessytableEval(
@@ -363,6 +364,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         """
         result_files, tmp_dir = self.format_results(results, jsonfile_prefix)
 
+        '''
         if isinstance(result_files, dict):
             results_dict = dict()
             for name in result_names:
@@ -377,6 +379,9 @@ class CustomMessytableDataset(CustomMtv2DDataset):
 
         if show:
             self.show(results, out_dir, pipeline=pipeline)
+        '''
+
+        results_dict = dict()
         return results_dict
 
     def _build_default_pipeline(self):
@@ -443,16 +448,26 @@ def output_to_messytable_box(detection):
     Returns:
         list[:obj:`NuScenesBox`]: List of standard NuScenesBoxes.
     """
-    box3d = detection['boxes_3d']
-    valid = detection['valid_3d'].numpy()
-    scores = detection['scores_3d'].numpy()
-    labels = detection['labels_3d'].numpy()
+    boxmtv2d = detection['boxes_mtv2d']
+    visibles = detection['visibles_mtv2d'].numpy()
+    scores = detection['scores_mtv2d'].numpy()
+    labels = detection['labels_mtv2d'].numpy()
+
+    num_views = visibles.shape[-1]
+    num_codes = boxmtv2d.shape[-1] // (num_views+1)
+    boxmtv2d = boxmtv2d[:, num_codes:]
+    cx = boxmtv2d[:, 0::num_codes] 
+    cy = boxmtv2d[:, 1::num_codes] 
+    w = boxmtv2d[:, 3::num_codes] 
+    h = boxmtv2d[:, 5::num_codes] 
+    boxmtv2d = torch.cat([cx, cy, w, h], dim=-1)
+    boxmtv2d = boxmtv2d.reshape(*boxmtv2d.shape[:-1], 4, num_views).transpose(-1, -2).flatten(-2).numpy()
 
     box_list = []
-    for i in range(len(box3d)):
+    for i in range(len(boxmtv2d)):
         box = dict(
-            boxes = box3d[i],
-            valid = valid[i],
+            boxes = boxmtv2d[i],
+            valid = visibles[i],
             label = labels[i],
             score = scores[i],
             )

@@ -1,17 +1,175 @@
 import numpy as np
 import copy
+import json
+import os
+import matplotlib.pyplot as plt
 
-class MessytableEval:
-    #def __init__(self, args, fx, fy):
-    def __init__(self, args):
-        self.num_valid_cam = args.num_valid_cam
-        #self.fx, self.fy = fx, fy         
-        self.class_list_wo_bg = args.class_list[:-1]
+class Data_to_monitor :
+    def __init__(self, name, names) :
+        self.name = name
+        self.names = names
+        self.num_data = len(names)
+        self.reset()
+
+    def add(self, data):
+        self.data = np.concatenate([self.data, np.array(data).reshape(-1, self.num_data)])
+
+    def mean(self):
+        return np.nanmean(self.data, axis=0)
+
+    def reset(self):
+        self.data = np.zeros((0, self.num_data))
+
+    def get_name(self):
+        return self.names
+
+    def get_best(self):
+        best_idx = np.argmax(self.data)
+        best = self.data[best_idx]
+        return best_idx[0], best
+
+    def get_length(self):
+        return len(self.data)
+
+    def get_data(self):
+        return self.data
+
+    def load(self, path):
+        self.data = np.load(path).reshape((-1, self.num_data))
+
+    def save(self, path):
+        np.save(path, self.data)
+
+    def plot(self, path):
+        epoch = len(self.data)
+        axis = np.linspace(1, epoch, epoch)
+        fig = plt.figure()
+        plt.title(self.name)
+        for n, d in zip(self.names, self.data.T) :
+            plt.plot(axis, d, label=n)
+        plt.legend()
+        plt.xlabel('Epochs')
+        plt.ylabel(self.name)
+        plt.grid(True)
+        plt.savefig(path)
+        plt.close(fig)
+
+    def display(self):
+        log = ['%s: %.4f'%(n, v) for n, v in zip(self.names, self.mean())]
+        return ' '.join(log)
+        
+
+class Log_manager:
+    def __init__(self, output_dir, class_list):
+        self.dir = output_dir
+        os.makedirs(self.dir, exist_ok=True)
+
+        self.log_file = self.get_log_file()
+
+        self.ap_names = class_list
+        self.ap = Data_to_monitor('ap', self.ap_names)
+        self.map = Data_to_monitor('map', ['map'])
+        self.iou = Data_to_monitor('iou', ['iou'])
+
+        self.best_map = 0
+        self.best_map_epoch = 0
+
+        '''
+        if args.resume:
+            self.ap.load(self.get_path('ap.npy'))
+            self.map.load(self.get_path('map.npy'))
+            self.iou.load(self.get_path('iou.npy'))
+            
+            self.best_map_epoch, self.best_map = slef.map.get_best()
+        '''
+
+    def get_path(self, *subdir):
+        return os.path.join(self.dir, *subdir)
+
+    def get_log_file(self):
+        #self.log_file_name = 'log_%s.txt' % (self.args.mode)
+        self.log_file_name = 'log.txt'
+        open_type = 'a' if os.path.exists(self.get_path(self.log_file_name))else 'w'
+        log_file = open(self.get_path(self.log_file_name), open_type)
+        return log_file
+
+    def save(self):
+        self.ap.save(self.get_path('ap'))
+        self.map.save(self.get_path('map'))
+        self.iou.save(self.get_path('iou'))
+        
+        self.ap.plot(self.get_path('ap.pdf'))
+        self.map.plot(self.get_path('map.pdf'))
+        self.iou.plot(self.get_path('iou.pdf'))
+
+    def add(self, data, name):
+        if name == 'ap':
+            self.ap.add(data)
+            mAP = sum(data)/len(data)
+            if(mAP > self.best_map):
+                self.best_map = mAP
+                self.best_map_epoch = self.map.get_length() + 1
+            self.map.add(mAP)
+        
+        elif name == 'iou' :
+            self.iou.add(data)
+
+    def epoch_done(self):
+        self.loss_every_epoch.add(self.loss_every_iter.mean())
+        self.num_calssifier_pos_samples_every_epoch.add(self.num_calssifier_pos_samples_every_iter.mean())
+
+        self.loss_every_iter.reset()
+        self.num_calssifier_pos_samples_every_iter.reset()
+        self.save()
+
+    def write_log(self, log, refresh=True):
+        print(log)
+        self.log_file.write(log + '\n')
+        if refresh:
+            self.log_file.close()
+            self.log_file = open(self.get_path(self.log_file_name), 'a')
+
+    def write_cur_time(self):
+        now = datetime.datetime.now().strftime('%Y-%m-%d-%H:%M:%S')
+        self.write_log(now)
+
+    def done(self):
+        self.log_file.close()
+
+    def plot(self, data, label):
+        epoch = len(data)
+        axis = np.linspace(1, epoch, epoch)
+        fig = plt.figure()
+        plt.title(label)
+        if(label == 'ap'):
+            for ap_name, ap in zip(self.ap_names, self.ap.T) :
+                plt.plot( axis, ap, label=ap_name)
+        else :
+            plt.plot( axis, data, label=label)
+        plt.legend()
+        plt.xlabel('Epochs')
+        plt.ylabel(label)
+        plt.grid(True)
+        plt.savefig(self.get_path('%s.pdf')%(label))
+        plt.close(fig)
+
+    def get_best_map(self):
+        return self.best_map
+
+    def get_best_map_idx(self):
+        return self.best_map_idx
+
+
+
+class Map_calculator:
+    def __init__(self, num_views, class_list, eval_rpn_only=False, eval_thresh=0):
+        self.num_valid_cam = num_views
+        self.class_list_wo_bg = class_list
         self.reset()
 
         self.min_overlap = 0.5
-        self.args = args
-
+        self.eval_rpn_only = eval_rpn_only
+        self.eval_thresh = eval_thresh
         self.metric = ['MODA', 'MODP', 'F1', 'Recall', 'Precision']
 
     def reset(self):
@@ -42,7 +200,6 @@ class MessytableEval:
                     info = {'class':gt_cls, 'x1':x1, 'y1':y1, 'x2':x2, 'y2':y2}
                     gts[cam_idx].append(info)
         return gts
-    '''
     '''
 
     def get_iou(self):
@@ -132,7 +289,6 @@ class MessytableEval:
         #import pdb
         #pdb.set_trace()
         return T, P, iou_result
-    '''
 
     def get_x1y1x2y2(self, box):
         x1 = box['x1']
@@ -149,7 +305,7 @@ class MessytableEval:
         for box_idx in box_idx_sorted_by_prob:
             pred_box = pred[box_idx]
             #cls = pred_box['class']
-            cls = pred_box['class'] if not self.args.eval_rpn_only else 'water1'
+            cls = pred_box['class'] if not self.eval_rpn_only else 'water1'
             prob = pred_box['prob']
             bbox = self.get_x1y1x2y2(pred_box)
             dr_data[cls].append({"confidence":prob, "bbox":bbox})
@@ -161,7 +317,7 @@ class MessytableEval:
 
         for gt_box in gt:
             #cls = gt_box['class']
-            cls = gt_box['class'] if not self.args.eval_rpn_only else 'water1'
+            cls = gt_box['class'] if not self.eval_rpn_only else 'water1'
             bbox = self.get_x1y1x2y2(gt_box)
             bbox = list(map(round, bbox))
             ground_truth_data[cls].append({"bbox":bbox, "used":False})
@@ -174,7 +330,7 @@ class MessytableEval:
         for cls_name, cur_cls_det in dets.items():
             result_det[cls_name] = []
             for det in cur_cls_det : 
-                if det['confidence'] > self.args.eval_thresh :
+                if det['confidence'] > self.eval_thresh :
                     result_det[cls_name].append(det)
                 else :
                     pass
@@ -391,35 +547,120 @@ class MessytableEval:
         return np.mean(valid_aps)
     '''
 
-    def main(self):
-        pass
+class DataLoader:
+    def __init__(self, num_views, thresh=0):
+        self.num_valid_cam = num_views
+        self.thresh = thresh
 
-def log_eval(map_calculator, log_manager) :
-    eval = map_calculator.get_eval()
-    mean_eval = map_calculator.get_mean_eval()
-    metric = map_calculator.metric
-    valid_cls = list(eval[0].keys())
-    '''
-    for metric_name, ev, m_ev in zip(metric, eval, mean_eval) :
-        log_manager.write_log('%s\t%.2f'%(metric_name, m_ev))
+    def get_gt(self, all_bboxes, all_is_valids, all_cls):
+        num_samples = len(all_bboxes)
+        data = [[] for _ in range(self.num_valid_cam)]
+        for sample_idx in range(num_samples) :
+            cls = all_cls[sample_idx]
+            for cam_idx in range(self.num_valid_cam) :
+                if all_is_valids[sample_idx, cam_idx] :
+                    cx, cy, w, h = all_bboxes[sample_idx][cam_idx]
+                    x1, y1, x2, y2 = (cx - w/2), (cy - h/2), (cx + w/2), (cy + h/2)
+                    info = {'class':cls, 'x1':x1, 'y1':y1, 'x2':x2, 'y2':y2}
+                    data[cam_idx].append(info)
+        return data 
+
+    def get_det(self, all_bboxes, all_is_valids, all_cls, all_score):
+        num_samples = len(all_bboxes)
+        data = [[] for _ in range(self.num_valid_cam)]
+        for sample_idx in range(num_samples) :
+            cls = all_cls[sample_idx]
+            score = all_score[sample_idx]
+            for cam_idx in range(self.num_valid_cam) :
+                is_valid = all_is_valids[sample_idx, cam_idx]
+                if is_valid > self.thresh :
+                    cx, cy, w, h = all_bboxes[sample_idx][cam_idx]
+                    x1, y1, x2, y2 = (cx - w/2), (cy - h/2), (cx + w/2), (cy + h/2)
+                    info = {'class':cls, 'x1':x1, 'y1':y1, 'x2':x2, 'y2':y2, 'prob':score, 'is_valid':is_valid}
+                    data[cam_idx].append(info)
+        return data 
+
+class MessytableEval:
+    def __init__(self, num_views, class_list, det_path, gt, output_dir, min_overlap=.5, eval_thresh=0):
+        self.num_valid_cam = num_views
+
+        self.gt = gt
+        with open(det_path) as f:
+            self.det = json.load(f)
+
+        self.DataLoader = DataLoader(num_views)
+        self.Map_calculator = Map_calculator(num_views, class_list, eval_thresh=eval_thresh)
+        self.Log_manager = Log_manager(output_dir, class_list)
+
+    def main(self) :
+        for gt in self.gt:
+            scene_id = gt['scene_id']
+            
+            gt_bboxes = gt['cam_instances'][:self.num_valid_cam].transpose(1, 0, 2) #(7, num_views, 4)
+            gt_is_valids = gt['cam_instances_valid_flags'][:self.num_valid_cam].transpose(1, 0) #(7, num_views)
+            gt_cls = gt['gt_names'] #(7, )
+
+            det = self.det[scene_id] #(300, )
+            num_det = len(det) # 300
+
+            det_bboxes = []
+            det_is_valids = []
+            det_cls = [] 
+            det_score = []
+            for inst in det :
+                det_bboxes.append(inst['camera_instances'])
+                det_is_valids.append(inst['camera_instances_valid_flag'])
+                det_cls.append(inst['detection_name'])
+                det_score.append(inst['detection_score'])
+            det_bboxes = np.array(det_bboxes).reshape((num_det, self.num_valid_cam, -1)) #(300, num_views, 4)
+            det_is_valids = np.array(det_is_valids).reshape(num_det, self.num_valid_cam) #(300, num_views)
+            det_cls = np.array(det_cls) #(300,)
+            det_score = np.array(det_score) #(300,)
+
+            gt = self.DataLoader.get_gt(gt_bboxes, gt_is_valids, gt_cls)
+            det = self.DataLoader.get_det(det_bboxes, det_is_valids, det_cls, det_score)
+
+            for cam_idx in range(self.num_valid_cam) :
+                self.Map_calculator.add_tp_fp(det[cam_idx], gt[cam_idx])
+
+        all_aps = self.Map_calculator.get_aps()
+        #iou_avg = self.Map_calculator.get_iou()
+
+        self.Log_manager.add(all_aps, 'ap')
+        #self.Log_manager.add(iou_avg, 'iou')
+        self.Log_manager.save()
+
+        all_ap_dict = self.Map_calculator.get_aps_dict()
+        cur_map = self.Map_calculator.get_map()
+
+        return all_ap_dict, cur_map
+
+    def log_eval(self) :
+        eval = self.Map_calculator.get_eval()
+        mean_eval = self.Map_calculator.get_mean_eval()
+        metric = self.Map_calculator.metric
+        valid_cls = list(eval[0].keys())
+        '''
+        for metric_name, ev, m_ev in zip(metric, eval, mean_eval) :
+            log_manager.write_log('%s\t%.2f'%(metric_name, m_ev))
+            for _, cls in enumerate(valid_cls):
+                e = ev[cls]
+                #if e<0: continue
+                log_manager.write_log('%s\t%.2f'%(cls, e))
+            log_manager.write_log('\n')
+        '''
+
+        metric_name = '\t'.join(metric)
+        metric_value = ['%.2f'%(m) for m in mean_eval]
+        metric_value = '\t'.join(metric_value)
+        self.Log_manager.write_log('metric\t%s'%(metric_name))
+        self.Log_manager.write_log('ALL\t%s'%(metric_value))
+
         for _, cls in enumerate(valid_cls):
-            e = ev[cls]
+            ev = [e[cls] for e in eval]
+            ev = ['%.2f'%(e) for e in ev]
+            ev = '\t'.join(ev)
             #if e<0: continue
-            log_manager.write_log('%s\t%.2f'%(cls, e))
-        log_manager.write_log('\n')
-    '''
-
-    metric_name = '\t'.join(metric)
-    metric_value = ['%.2f'%(m) for m in mean_eval]
-    metric_value = '\t'.join(metric_value)
-    log_manager.write_log('metric\t%s'%(metric_name))
-    log_manager.write_log('ALL\t%s'%(metric_value))
-
-    for _, cls in enumerate(valid_cls):
-        ev = [e[cls] for e in eval]
-        ev = ['%.2f'%(e) for e in ev]
-        ev = '\t'.join(ev)
-        #if e<0: continue
-        log_manager.write_log('%s\t%s'%(cls, ev))
-    log_manager.write_log('\n')
+            self.Log_manager.write_log('%s\t%s'%(cls, ev))
+        self.Log_manager.write_log('\n')
 

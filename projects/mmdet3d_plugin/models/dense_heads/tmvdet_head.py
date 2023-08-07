@@ -766,6 +766,14 @@ class TMVDetHead(VEDetHead):
             bboxes = preds['bboxes']
             #bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
             #bboxes = img_metas[i]['box_type_3d'](bboxes, bboxes.size(-1))
+            if rescale :
+                code_size = bboxes.shape[-1] // (self.num_decode_views + 1)
+                scale_factor = img_metas[0]['scale_factor'][0] 
+                bboxes[:, 0::code_size] /= scale_factor[0]
+                bboxes[:, 1::code_size] /= scale_factor[1]
+                bboxes[:, 3::code_size] /= scale_factor[2]
+                bboxes[:, 5::code_size] /= scale_factor[3]
+
             visibles = preds['visibles']
             scores = preds['scores']
             labels = preds['labels']

@@ -593,12 +593,13 @@ class MessytableEval:
         self.Log_manager = Log_manager(output_dir, class_list)
 
     def main(self) :
+        result_list = []
         for gt in self.gt:
             scene_id = gt['scene_id']
             
             gt_bboxes = gt['cam_instances'][:self.num_valid_cam].transpose(1, 0, 2) #(7, num_views, 4)
             gt_is_valids = gt['cam_instances_valid_flags'][:self.num_valid_cam].transpose(1, 0) #(7, num_views)
-            gt_cls = gt['gt_names'] #(7, )
+            gt_cls = np.array(gt['gt_names']) #(7, )
 
             det = self.det[scene_id] #(300, )
             num_det = len(det) # 300
@@ -623,6 +624,8 @@ class MessytableEval:
             for cam_idx in range(self.num_valid_cam) :
                 self.Map_calculator.add_tp_fp(det[cam_idx], gt[cam_idx])
 
+            result_list.append([scene_id, gt_bboxes.transpose(1, 0, 2), gt_is_valids.transpose(1, 0), gt_cls, det_bboxes.transpose(1, 0, 2), det_is_valids.transpose(1, 0), det_cls, det_score])
+
         all_aps = self.Map_calculator.get_aps()
         #iou_avg = self.Map_calculator.get_iou()
 
@@ -633,7 +636,7 @@ class MessytableEval:
         all_ap_dict = self.Map_calculator.get_aps_dict()
         cur_map = self.Map_calculator.get_map()
 
-        return all_ap_dict, cur_map
+        return all_ap_dict, cur_map, result_list
 
     def log_eval(self) :
         eval = self.Map_calculator.get_eval()

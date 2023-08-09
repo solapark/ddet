@@ -141,10 +141,9 @@ data_root = 'data/v1.0-mini/'
 
 file_client_args = dict(backend='disk')
 ida_aug_conf = {
-    #"resize_lim": (0.94, 1.25),
-    "resize_lim": (0.3, 0.4),
+    "resize_lim": (0.94, 1.25),
     #"final_dim": (640, 1600),
-    "final_dim": (160, 400),
+    "final_dim": (320, 800),
     "bot_pct_lim": (0.0, 0.0),
     "rot_lim": (0.0, 0.0),
     "H": 900,
@@ -254,7 +253,7 @@ lr_config = dict(
 )
 total_epochs = 24
 #evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], show=True, out_dir='/data3/sap/VEDet/result')
-evaluation = dict(interval=1, pipeline=test_pipeline, metric=['bbox'], show=True, out_dir='/data3/sap/VEDet/result')
+evaluation = dict(interval=1, pipeline=test_pipeline, metric=['bbox'])
 checkpoint_config = dict(interval=24)
 find_unused_parameters = False
 

@@ -196,7 +196,8 @@ train_pipeline = [
     #dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False, use_virtual=True, num_views=num_views),
     dict(type='LoadMultiviewTargets', num_views=num_views),
     #dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-    dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.3, .4]),
+    #dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.3, .4]),
+    dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.4, .4]),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
     dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img'], meta_keys=meta_keys)
@@ -208,7 +209,8 @@ test_pipeline = [
     #dict(type='ComputeMultiviewTargets', local_frame=True, visible_only=False),
     dict(type='LoadMultiviewTargets', num_views=num_views),
     #dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-    dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.3, .4]),
+    #dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.3, .4]),
+    dict(type='ResizeMultiview3D', num_views=num_views, img_scale=(1080, 1920), ratio_range =[.4, .4]),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(
         type='MultiScaleFlipAug3D',
@@ -231,8 +233,8 @@ data = dict(
         type=dataset_type,
         data_root=data_root,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_train.pkl',
-        ann_file=data_root + 'messytable_infos_train.pkl',
-        #ann_file=data_root + 'messytable_infos_debug.pkl',
+        #ann_file=data_root + 'messytable_infos_train.pkl',
+        ann_file=data_root + 'messytable_infos_debug.pkl',
         pipeline=train_pipeline,
         classes=class_names,
         #modality=input_modality,
@@ -280,7 +282,8 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 24
-evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True)
+#evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1)
+evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True, out_dir='/data3/sap/VEDet/result', img_root='/data1/sap/MessyTable/images/')
 #checkpoint_config = dict(interval=24)
 checkpoint_config = dict(interval=2)
 find_unused_parameters = False

@@ -286,16 +286,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             output_dir=output_dir,
             eval_thresh=eval_thresh,)
             #verbose=False)
-        all_ap_dict, cur_map = messytable_eval.main()
+        all_ap_dict, cur_map, self.result_list = messytable_eval.main()
         messytable_eval.log_eval()
-
-        # record metrics
-        #metrics = mmcv.load(osp.join(output_dir, 'metrics_summary.json'))
-        detail = dict()
-        metric_prefix = f'{result_name}_Messytable'
-        #detail['{}/mAP'.format(metric_prefix)] = metrics['mean_ap']
-        detail['{}/mAP'.format(metric_prefix)] = cur_map
-        return detail
 
     def format_results(self, results, jsonfile_prefix=None):
         """Format the results to json (standard format for COCO evaluation).
@@ -345,6 +337,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
     def evaluate(self,
                  results,
                  eval_thresh,
+                 img_root,
                  metric='bbox',
                  logger=None,
                  jsonfile_prefix=None,
@@ -375,19 +368,17 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         result_files, tmp_dir = self.format_results(results, jsonfile_prefix)
 
         if isinstance(result_files, dict):
-            results_dict = dict()
             for name in result_names:
                 print('Evaluating bboxes of {}'.format(name))
-                ret_dict = self._evaluate_single(result_files[name], eval_thresh)
-            results_dict.update(ret_dict)
+                self._evaluate_single(result_files[name], eval_thresh)
         elif isinstance(result_files, str):
-            results_dict = self._evaluate_single(result_files, eval_thresh)
+            self._evaluate_single(result_files, eval_thresh)
+
+        if show:
+            self.show(img_root, out_dir, eval_thresh, pipeline=pipeline)
 
         if tmp_dir is not None:
             tmp_dir.cleanup()
-
-        if show:
-            self.show(results, out_dir, pipeline=pipeline)
 
         results_dict = dict()
         return results_dict
@@ -413,7 +404,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         ]
         return Compose(pipeline)
 
-    def show(self, results, out_dir, show=True, pipeline=None, wait_time=0):
+    def show(self, data_root, out_dir, eval_thresh, show=True, pipeline=None, wait_time=0):
         """Results visualization.
 
         Args:
@@ -424,24 +415,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                 Default: None.
         """
         assert out_dir is not None, 'Expect out_dir, got none.'
-        pipeline = self._get_pipeline(pipeline)
-        for i, result in enumerate(results):
-            if 'pts_bbox' in result.keys():
-                result = result['pts_bbox']
-            data_info = self.data_infos[i]
-            scene_id = data_info['scene_id']
-
-            show_gt_ids = self.get_ann_info(i)['gt_ids'].tensor.numpy()
-            show_gt_names = self.get_ann_info(i)['gt_names'].tensor.numpy()
-            show_gt_cam_instances = self.get_ann_info(i)['cam_instances'].tensor.numpy()
-            show_gt_cam_instances_valid_flags = self.get_ann_info(i)['cam_instances_valid_flags'].tensor.numpy()
-            show_gt_cams = self.get_ann_info(i)['cams'].tensor.numpy()
-
-            inds = result['scores_3d'] > 0.1
-            show_pred_bboxes = result['boxes_3d'][inds].tensor.numpy()
-
-            out_file = os.path.join(out_dir, scene_id+'.jpg')
-            show_result_mtv2d(show_gt_cam_instances, show_gt_cam_instances_valid_flags, show_gt_cams, show_pred_bboxes, out_file=out_file, show=show, wait_time=wait_time) 
+        for result in self.result_list:
+            show_result_mtv2d(data_root, out_dir, result, eval_thresh=eval_thresh, show=show, wait_time=wait_time) 
 
 def output_to_messytable_box(detection):
     """Convert the output to the box class in the nuScenes.

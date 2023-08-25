@@ -49,15 +49,16 @@ code_weights = [0.0] * pred_size + [0.0] * pred_size * num_views
 #code_weights[9] = 0.2
 #virtual_weights = 0.2
 virtual_weights = 1.0
+wh_weights = 400.
 for i in range(1, num_views + 1):
     code_weights[i * pred_size] = virtual_weights  # x
     code_weights[i * pred_size + 1] = virtual_weights  # y
     #code_weights[i * 10 + 4] = virtual_weights  # z
     #code_weights[i * 10 + 6] = virtual_weights  # sin(yaw)
     #code_weights[i * 10 + 7] = virtual_weights  # cos(yaw)
-    code_weights[i * pred_size + 2] = virtual_weights  # w
+    code_weights[i * pred_size + 2] = wh_weights  # w
     #code_weights[i * 10 + 3] = virtual_weights  # l
-    code_weights[i * pred_size + 5] = virtual_weights  # h
+    code_weights[i * pred_size + 5] = wh_weights  # h
     #code_weights[i * 10 + 8] = 0.2 * virtual_weights  # vx
     #code_weights[i * 10 + 9] = 0.2 * virtual_weights  # vy
 model = dict(
@@ -227,8 +228,8 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=1,
-    #workers_per_gpu=4,
-    workers_per_gpu=0,
+    workers_per_gpu=4,
+    #workers_per_gpu=0,
     train=dict(
         type=dataset_type,
         data_root=data_root,
@@ -258,10 +259,11 @@ data = dict(
         type=dataset_type,
         pipeline=test_pipeline,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_val.pkl',
-        #ann_file=data_root + 'messytable_infos_test.pkl',
-        ann_file=data_root + 'messytable_infos_debug.pkl',
+        ann_file=data_root + 'messytable_infos_test.pkl',
+        #ann_file=data_root + 'messytable_infos_debug.pkl',
         classes=class_names,
         num_views=num_views,
+        num_load=10,
         #modality=input_modality
         )
     )
@@ -283,11 +285,12 @@ lr_config = dict(
 )
 total_epochs = 24
 #evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1)
-evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True, out_dir='/data3/sap/VEDet/result', img_root='/data1/sap/MessyTable/images/')
+evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.2, show=True, out_dir='/data3/sap/VEDet/result', img_root='/data1/sap/MessyTable/images/')
 #checkpoint_config = dict(interval=24)
 checkpoint_config = dict(interval=2)
 find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
+#load_from = '/data3/sap/VEDet/work_dirs/vedet_messytable2/epoch_24.pth'
 resume_from = None

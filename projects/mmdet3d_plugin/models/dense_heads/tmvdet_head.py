@@ -312,6 +312,7 @@ class TMVDetHead(VEDetHead):
                 #    [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
 
                 bbox_preds = torch.stack(regs, dim=0) if isinstance(regs, list) else regs
+                bbox_preds[..., 0:10] = 0
                 bbox_preds[..., 0::10] = (
                     #bbox_preds[..., 0::10] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0])
                     bbox_preds[..., 0::10] * input_img_w)
@@ -542,7 +543,8 @@ class TMVDetHead(VEDetHead):
             loss_cls = torch.nan_to_num(loss_cls)
             loss_visible = torch.nan_to_num(loss_visible)
             loss_bbox = torch.nan_to_num(loss_bbox)
-            #print(torch.abs(bbox_preds[isnotnan][0] - normalized_bbox_targets[isnotnan][0]))
+            #print(torch.abs(bbox_preds[isnotnan] - normalized_bbox_targets[isnotnan]))
+            #print('')
             #print('loss_cls', loss_cls, 'loss_visible', loss_visible, 'loss_bbox', loss_bbox)
             #print('')
 

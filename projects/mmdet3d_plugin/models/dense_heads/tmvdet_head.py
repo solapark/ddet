@@ -70,6 +70,7 @@ class TMVDetHead(VEDetHead):
                  input_pts_encoding=None,
                  output_det_encoding=None,
                  output_seg_encoding=None,
+                 emb_intrinsics=False,
                  code_weights=None,
                  num_decode_views=2,
                  reg_channels=None,
@@ -220,6 +221,7 @@ class TMVDetHead(VEDetHead):
 
         self.loss_visible = build_loss(loss_visible) if loss_visible else None
         self.pred_size = pred_size
+        self.emb_intrinsics = emb_intrinsics
         '''
         if self.loss_visible is not None and self.loss_visible.use_sigmoid:
             self.visible_out_channels = 1
@@ -781,3 +783,72 @@ class TMVDetHead(VEDetHead):
             labels = preds['labels']
             ret_list.append([bboxes, visibles, scores, labels])
         return ret_list
+
+    def add_pose_info(self, init_det_points, init_det_points_mtv, img_metas):
+        if not self.emb_intrinsics :
+            return super(TMVDetHead, self).add_pose_info(init_det_points, init_det_points_mtv, img_metas)
+
+        # add identity pose to ego queries and make V copies of queries with viewing poses as mtv queries
+        B = init_det_points.shape[0]
+        identity_quat = init_det_points.new_zeros(B, 1, self.num_query, 4)
+        identity_quat[..., 0] = 1
+        # (B, 1, M, 10)
+        #init_det_points = torch.cat([init_det_points, identity_quat, torch.zeros_like(init_det_points)], dim=-1)
+        init_det_points = torch.cat([init_det_points, identity_quat, torch.zeros_like(init_det_points), torch.zeros_like(identity_quat)], dim=-1) #(1, 1, 900, 14)
+
+        if init_det_points_mtv is None:
+            return init_det_points, None
+
+        dec_extrinsics = init_det_points.new_tensor([img_meta['dec_extrinsics'] for img_meta in img_metas])
+        dec_quat = tfms.matrix_to_quaternion(dec_extrinsics[..., :3, :3].transpose(-1, -2))
+        dec_tvec = dec_extrinsics[..., :3, 3]
+        # (B, V, M, 7)
+        dec_pose = torch.cat([dec_quat, dec_tvec], dim=-1).unsqueeze(2).repeat(1, 1, self.num_query, 1)
+
+        intrinsics = init_det_points.new_tensor([img_meta['intrinsics'] for img_meta in img_metas]) #(1, 9, 4, 4)
+        intrinsics = intrinsics[:, :self.num_decode_views, :3, :3] #(1, 2, 3, 3)
+        fx = intrinsics[:, :, 0, 0] #(1, 2, 1)
+        fy = intrinsics[:, :, 1, 1]
+        x0 = intrinsics[:, :, 0, 2]
+        y0 = intrinsics[:, :, 1, 2]
+        intrinsics = torch.stack([fx, fy, x0, y0], dim=-1).unsqueeze(2).repeat(1, 1, self.num_query, 1) #(1, 2, 900, 4)
+
+        # (B, V, M, 10)
+        #init_det_points_mtv = torch.cat([init_det_points_mtv, dec_pose], dim=-1)
+        init_det_points_mtv = torch.cat([init_det_points_mtv, dec_pose, intrinsics], dim=-1) #(1, 2, 900, 14) 
+
+        return init_det_points, init_det_points_mtv
+
+    def position_embedding(self, img_feat, img_metas, mask, depth_maps=None, use_cache_depth=False):
+        if not self.emb_intrinsics :
+            return super(TMVDetHead, self).position_embedding(img_feat, img_metas, mask, depth_maps=depth_maps, use_cache_depth=use_cache_depth)
+
+        pad_h, pad_w, _ = img_metas[0]['pad_shape'][0]
+        B, N, _, H, W = img_feat.shape
+        rays, extrinsics = self.generate_rays(pad_h, pad_w, H, W, img_feat, img_metas)
+        rg = self.pc_range
+        divider = torch.tensor([rg[3] - rg[0], rg[4] - rg[1], rg[5] - rg[2]], device=extrinsics.device)
+        subtract = torch.tensor([rg[0], rg[1], rg[2]], device=extrinsics.device)
+
+        ctrs = extrinsics[..., :3, 3]
+        ctrs = (ctrs - subtract) / divider
+
+        # pytorch3d uses row-major, so transpose the R first
+        quats = tfms.matrix_to_quaternion(extrinsics[..., :3, :3].transpose(-1, -2))
+        ctrs = torch.cat([ctrs, quats], dim=-1) #(1, num_views, H, W, 7)
+
+        intrinsics = ctrs.new_tensor([img_meta['intrinsics'] for img_meta in img_metas]) #(1, 9, 4, 4)
+        intrinsics = intrinsics[:, :, :3, :3] #(1, 9, 3, 3)
+        fx = intrinsics[:, :, 0, 0] #(1, 9, 1)
+        fy = intrinsics[:, :, 1, 1]
+        x0 = intrinsics[:, :, 0, 2]
+        y0 = intrinsics[:, :, 1, 2]
+        intrinsics = torch.stack([fx, fy, x0, y0], dim=-1).unsqueeze(2).unsqueeze(3).repeat(1, 1, H, W, 1) #(1, 9, H, W, 4)
+        ctrs = torch.cat([ctrs, intrinsics], dim=-1) #(1, 9, H, W, 14)
+
+        geometry = torch.cat([ctrs, rays], dim=-1)
+        camera_embedding = self.input_ray_encoding(geometry)
+
+        return camera_embedding, mask
+
+

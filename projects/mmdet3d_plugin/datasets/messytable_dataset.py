@@ -6,6 +6,7 @@ import tempfile
 from nuscenes.utils.data_classes import Box as NuScenesBox
 from os import path as osp
 import torch
+import time 
 
 from mmdet.datasets import DATASETS
 #from mmdet.core.visualization import imshow_gt_det_bboxes
@@ -75,6 +76,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         self.num_load = num_load
         self.use_valid_flag = use_valid_flag
         self.num_views = num_views
+        self.timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
         super().__init__(
             data_root=data_root,
             ann_file=ann_file,
@@ -264,6 +266,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
     def _evaluate_single(self,
                          result_path,
                          eval_thresh,
+                         out_dir,
                          logger=None,
                          metric='bbox',
                          result_name='pts_bbox'):
@@ -281,8 +284,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             dict: Dictionary of evaluation details.
         """
         from ..core.evaluation.messytable_eval import MessytableEval
-
-        output_dir = osp.join(*osp.split(result_path)[:-1])
+        output_dir = osp.join(out_dir, self.timestamp)
         messytable_eval = MessytableEval(
             num_views = self.num_views,
             class_list = self.CLASSES,
@@ -348,8 +350,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                  jsonfile_prefix=None,
                  result_names=['pts_bbox'],
                  show=False,
+                 save_dir=None, 
                  show_gt=True,
-                 out_dir=None,
                  pipeline=None):
         """Evaluation in nuScenes protocol.
 
@@ -376,12 +378,12 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         if isinstance(result_files, dict):
             for name in result_names:
                 print('Evaluating bboxes of {}'.format(name))
-                self._evaluate_single(result_files[name], eval_thresh)
+                self._evaluate_single(result_files[name], eval_thresh, save_dir)
         elif isinstance(result_files, str):
-            self._evaluate_single(result_files, eval_thresh)
+            self._evaluate_single(result_files, eval_thresh, save_dir)
 
         if show:
-            self.show(img_root, out_dir, eval_thresh, pipeline=pipeline, show_gt=show_gt)
+            self.show(img_root, save_dir, eval_thresh, pipeline=pipeline, show_gt=show_gt)
 
         if tmp_dir is not None:
             tmp_dir.cleanup()

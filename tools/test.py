@@ -243,4 +243,5 @@ def main():
 
 
 if __name__ == '__main__':
+    torch.set_printoptions(sci_mode=False)
     main()

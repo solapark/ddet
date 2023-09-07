@@ -7,7 +7,6 @@
 # Modified from mmdetection3d (https://github.com/open-mmlab/mmdetection3d)
 # Copyright (c) OpenMMLab. All rights reserved.
 # ------------------------------------------------------------------------
-
 from __future__ import division
 
 import argparse
@@ -254,4 +253,5 @@ def main():
 
 
 if __name__ == '__main__':
+    torch.set_printoptions(sci_mode=False)
     main()

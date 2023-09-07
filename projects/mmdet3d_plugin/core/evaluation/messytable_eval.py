@@ -3,6 +3,7 @@ import copy
 import json
 import os
 import matplotlib.pyplot as plt
+import datetime
 
 class Data_to_monitor :
     def __init__(self, name, names) :
@@ -593,6 +594,7 @@ class MessytableEval:
         self.Log_manager = Log_manager(output_dir, class_list)
 
     def main(self) :
+        self.Log_manager.write_cur_time()
         result_list = []
         for gt in self.gt:
             scene_id = gt['scene_id']

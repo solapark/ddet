@@ -10,13 +10,14 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # ------------------------------------------------------------------------
 import torch
+from copy import deepcopy
 
 from mmdet.core.bbox.builder import BBOX_ASSIGNERS
 from mmdet.core.bbox.assigners import AssignResult
 from mmdet.core.bbox.assigners import BaseAssigner
 from mmdet.core.bbox.match_costs import build_match_cost
 from mmdet.models.utils.transformer import inverse_sigmoid
-from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox
+from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox, denormalize_bbox
 
 try:
     from scipy.optimize import linear_sum_assignment
@@ -64,7 +65,7 @@ class HungarianAssignerMtv2D(BaseAssigner):
         self.align_with_loss = align_with_loss
         self.pc_range = pc_range
 
-    def assign(self, bbox_pred, cls_pred, visible_pred, gt_bboxes, gt_labels, gt_visibles, gt_bboxes_ignore=None, code_weights=None, eps=1e-7):
+    def assign(self, bbox_pred, cls_pred, visible_pred, gt_bboxes, gt_labels, gt_visibles, gt_bboxes_ignore=None, code_weights=None, eps=1e-7, img_shape=None):
         """Computes one-to-one matching based on the weighted costs.
         This method assign each query prediction to a ground truth or
         background. The `assigned_gt_inds` with -1 means don't care,
@@ -108,9 +109,12 @@ class HungarianAssignerMtv2D(BaseAssigner):
             return AssignResult(num_gts, assigned_gt_inds, None, labels=assigned_labels)
 
         # 2. compute the weighted costs
-        # classification and bboxcost.
-        cls_cost = self.cls_cost(cls_pred, gt_labels)
+        cost = 0
 
+        # classification and bboxcost.
+        if self.cls_cost.weight > 0 :
+            cost = self.cls_cost(cls_pred, gt_labels)
+            
         # visible_cost.
         #visible_cost = []
         #for i in range(gt_visibles.shape[-1]):
@@ -120,21 +124,35 @@ class HungarianAssignerMtv2D(BaseAssigner):
             
         #visible_cost = self.visible_cost(visible_pred, gt_visibles) #(900, 50, 2)
         #visible_cost = torch.mean(visible_cost, -1) #(900, 50)
+
         # regression L1 cost
-        normalized_gt_bboxes = normalize_bbox(gt_bboxes, self.pc_range)
-        if self.align_with_loss:
-            normalized_gt_bboxes = normalized_gt_bboxes * code_weights
-            normalized_gt_bboxes = torch.nan_to_num(normalized_gt_bboxes)
-            bbox_pred = bbox_pred * code_weights
-            #reg_cost = self.reg_cost(bbox_pred, normalized_gt_bboxes)
-            reg_cost = self.reg_cost(bbox_pred, normalized_gt_bboxes, 1-gt_visibles)
-        else:
-            #reg_cost = self.reg_cost(bbox_pred[:, :8], normalized_gt_bboxes[:, :8])
-            reg_cost = self.reg_cost(bbox_pred[:, :8], normalized_gt_bboxes[:, :8], 1-gt_visibles)
+        if self.reg_cost.weight > 0 :
+            normalized_gt_bboxes = normalize_bbox(gt_bboxes, self.pc_range)
+            if self.align_with_loss:
+                normalized_gt_bboxes = normalized_gt_bboxes * code_weights
+                normalized_gt_bboxes = torch.nan_to_num(normalized_gt_bboxes)
+                bbox_pred = bbox_pred * code_weights
+                #reg_cost = self.reg_cost(bbox_pred, normalized_gt_bboxes)
+                reg_cost = self.reg_cost(bbox_pred, normalized_gt_bboxes, 1-gt_visibles)
+            else:
+                #reg_cost = self.reg_cost(bbox_pred[:, :8], normalized_gt_bboxes[:, :8])
+                reg_cost = self.reg_cost(bbox_pred[:, :8], normalized_gt_bboxes[:, :8], 1-gt_visibles)
+            cost = cost + reg_cost
+        else : 
+            denormalized_bbox_pred = denormalize_bbox(bbox_pred, self.pc_range)
+            denormalized_gt_bboxes = deepcopy(gt_bboxes)
+
+            H, W = img_shape
+            denormalized_bbox_pred[:, 9::9] = denormalized_bbox_pred[:, 9::9] * W
+            denormalized_bbox_pred[:, 10::9] = denormalized_bbox_pred[:, 10::9] * H
+            denormalized_gt_bboxes[:, 9::9] = denormalized_gt_bboxes[:, 9::9] * W
+            denormalized_gt_bboxes[:, 10::9] = denormalized_gt_bboxes[:, 10::9] * H
+            iou_cost = self.iou_cost(denormalized_bbox_pred, denormalized_gt_bboxes, 1-gt_visibles)
+            cost = cost + iou_cost
 
         # weighted sum of above tree costs
         #cost = cls_cost + reg_cost + visible_cost
-        cost = cls_cost + reg_cost
+        #cost = cls_cost + reg_cost
 
         # 3. do Hungarian matching on CPU using linear_sum_assignment
         cost = cost.detach().cpu()

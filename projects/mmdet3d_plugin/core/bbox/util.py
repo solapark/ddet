@@ -103,3 +103,39 @@ def denormalize_bbox(normalized_bboxes, pc_range):
     denormalized_bboxes = denormalized_bboxes.transpose(-1, -2).flatten(-2)
 
     return denormalized_bboxes
+
+def cxcywh2x1y1x2y2(boxes):
+    """
+    Convert bounding boxes from (cx, cy, w, h) format to (x1, y1, x2, y2) format.
+
+    Args:
+        boxes (torch.Tensor): Bounding boxes in (cx, cy, w, h) format.
+
+    Returns:
+        torch.Tensor: Bounding boxes in (x1, y1, x2, y2) format.
+    """
+    x1 = boxes[..., 0] - boxes[..., 2] / 2
+    y1 = boxes[..., 1] - boxes[..., 3] / 2
+    x2 = boxes[..., 0] + boxes[..., 2] / 2
+    y2 = boxes[..., 1] + boxes[..., 3] / 2
+
+    return torch.stack((x1, y1, x2, y2), dim=-1)
+
+def x1y1x2y22cxcywh(boxes):
+    """
+    Convert bounding boxes from (x1, y1, x2, y2) format to (cx, cy, w, h) format.
+
+    Args:
+        boxes (torch.Tensor): Bounding boxes in (x1, y1, x2, y2) format.
+
+    Returns:
+        torch.Tensor: Bounding boxes in (cx, cy, w, h) format.
+    """
+    cx = (boxes[..., 0] + boxes[..., 2]) / 2
+    cy = (boxes[..., 1] + boxes[..., 3]) / 2
+    w = boxes[..., 2] - boxes[..., 0]
+    h = boxes[..., 3] - boxes[..., 1]
+
+    return torch.stack((cx, cy, w, h), dim=-1)
+
+

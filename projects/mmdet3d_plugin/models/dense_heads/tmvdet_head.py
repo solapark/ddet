@@ -59,6 +59,7 @@ class TMVDetHead(VEDetHead):
 
     def __init__(self,
                  in_channels,
+                 debug=False,
                  pred_size=10,
                  num_classes=10,
                  num_query=900,
@@ -98,6 +99,7 @@ class TMVDetHead(VEDetHead):
         # NOTE here use `AnchorFreeHead` instead of `TransformerHead`,
         # since it brings inconvenience when the initialization of
         # `AnchorFreeHead` is called.
+        self.debug = debug
         if 'code_size' in kwargs:
             self.code_size = kwargs['code_size']
         else:
@@ -254,7 +256,7 @@ class TMVDetHead(VEDetHead):
                 nn.init.constant_(visible_branch[-1].bias, bias_init)
     '''
 
-    def forward(self, mlvl_feats, img_metas):
+    def forward(self, mlvl_feats, img_metas, is_test=False):
         """Forward function.
         Args:
             mlvl_feats (tuple[Tensor]): Features from the upstream
@@ -269,6 +271,7 @@ class TMVDetHead(VEDetHead):
                 Shape [nb_dec, bs, num_query, 9].
         """
         #print(img_metas[0]['filename'])
+        self.img_metas = img_metas
         batch_size, num_cams = mlvl_feats[0].shape[:2]
         input_img_h, input_img_w, _ = img_metas[0]['pad_shape'][0]
         masks_full = mlvl_feats[0].new_ones((batch_size, num_cams, input_img_h, input_img_w))
@@ -314,15 +317,16 @@ class TMVDetHead(VEDetHead):
                 #    [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
 
                 bbox_preds = torch.stack(regs, dim=0) if isinstance(regs, list) else regs
-                bbox_preds[..., 0:10] = 0
-                bbox_preds[..., 0::10] = (
-                    #bbox_preds[..., 0::10] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0])
-                    bbox_preds[..., 0::10] * input_img_w)
-                bbox_preds[..., 1::10] = (
-                    #bbox_preds[..., 1::10] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1])
-                    bbox_preds[..., 1::10] * input_img_h)
-                #bbox_preds[..., 4::10] = (
-                #    bbox_preds[..., 4::10] * (self.pc_range[5] - self.pc_range[2]) + self.pc_range[2])
+                #bbox_preds[..., 0:10] = 0
+                if is_test :
+                    bbox_preds[..., 0::10] = (
+                        #bbox_preds[..., 0::10] * (self.pc_range[3] - self.pc_range[0]) + self.pc_range[0])
+                        bbox_preds[..., 0::10] * input_img_w)
+                    bbox_preds[..., 1::10] = (
+                        #bbox_preds[..., 1::10] * (self.pc_range[4] - self.pc_range[1]) + self.pc_range[1])
+                        bbox_preds[..., 1::10] * input_img_h)
+                    #bbox_preds[..., 4::10] = (
+                    #    bbox_preds[..., 4::10] * (self.pc_range[5] - self.pc_range[2]) + self.pc_range[2])
 
                 if self.with_time:
                     time_stamps = []
@@ -377,7 +381,7 @@ class TMVDetHead(VEDetHead):
         # assigner and sampler
         #assign_result = self.assigner.assign(bbox_pred, cls_score, gt_bboxes, gt_labels, gt_bboxes_ignore,
         assign_result = self.assigner.assign(bbox_pred, cls_score, visible_score, gt_bboxes, gt_labels, gt_visibles, gt_bboxes_ignore,
-                                             self.code_weights)
+                                             self.code_weights, img_shape = self.img_metas[0]['pad_shape'][0][:2])
         sampling_result = self.sampler.sample(assign_result, bbox_pred, gt_bboxes)
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
@@ -536,6 +540,196 @@ class TMVDetHead(VEDetHead):
             bbox_weights = bbox_weights * self.code_weights 
             normalized_bbox_targets = torch.nan_to_num(normalized_bbox_targets, nan=0, posinf=0, neginf=0)
 
+            #input_img_h, input_img_w, _ = self.img_metas[0]['pad_shape'][0]
+            #normalized_bbox_targets[..., 0::10] = normalized_bbox_targets[..., 0::10] / input_img_w
+            #normalized_bbox_targets[..., 1::10] = normalized_bbox_targets[..., 1::10] / input_img_h
+
+            if self.debug :
+                import torch.nn.functional as F
+                from ...core.bbox.util import denormalize_bbox
+                from ...core.visualization.show_result_mtv2d import  imshow_gt_det_bboxes
+                import os
+                import mmcv
+
+                target_idx = torch.unique(torch.where(bbox_targets!=0)[0])
+
+                pred_cls_scores, pred_labels = F.softmax(cls_scores, dim=-1)[..., :-1].max(-1)
+                pred_labels = pred_labels[target_idx]
+                show_bbox_preds = bbox_preds[target_idx]
+                show_bbox_preds = denormalize_bbox(show_bbox_preds, self.pc_range)[:, 9:]
+                cls_scores_sig = cls_scores.sigmoid()
+
+                gt_labels = labels[target_idx]
+                gt_bbox = bbox_targets[target_idx][:, 9:]
+
+                cam_det_cls = pred_labels.cpu().numpy().astype('str') #(num_pred,) #str
+                cam_det_score = cls_scores_sig[target_idx][(torch.arange(len(pred_labels)), pred_labels)] #(num_pred,) #float
+
+                cam_gt_cls = gt_labels.cpu().numpy().astype('str') #(num_gt, ) #str
+
+                input_img_h, input_img_w, _ = self.img_metas[0]['pad_shape'][0]
+
+                img_list = []
+                imgs = self.img_metas[0]['img'][0].permute(0, 2, 3, 1)
+                
+                is_draw_all_cls_all_inst = True
+                if is_draw_all_cls_all_inst : 
+                    for i in range(self.num_decode_views) :
+                        img = imgs[i]
+                        cam_gt_bboxes = gt_bbox[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_gt, 4) #(cx cy w h)
+
+                        cam_det_bboxes = show_bbox_preds[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_pred, 4) #(cx cy w h)
+
+                        cam_det_bboxes[:, 0] = cam_det_bboxes[:, 0] * input_img_w
+                        cam_det_bboxes[:, 1] = cam_det_bboxes[:, 1] * input_img_h
+                        cam_gt_bboxes[:, 0] = cam_gt_bboxes[:, 0] * input_img_w
+                        cam_gt_bboxes[:, 1] = cam_gt_bboxes[:, 1] * input_img_h
+
+                        img = img.cpu().numpy().astype(np.uint8)
+                        img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, 1)
+                        img_list.append(img)
+                    img = np.concatenate(img_list, axis=0)
+
+                    result_path = os.path.join('/data3/sap/VEDet/result/messytable10_debug', '%s.jpg'%('1'))
+                    mmcv.imwrite(img, result_path)
+
+                is_draw_all_pred = False
+                if is_draw_all_pred : 
+                    all_bbox_preds = denormalize_bbox(bbox_preds, self.pc_range)[:, 9:]
+                    for jj in range(len(all_bbox_preds)) :
+                        img_list = []
+                        imgs = self.img_metas[0]['img'][0].permute(0, 2, 3, 1)
+                        for i in range(self.num_decode_views) :
+                            img = imgs[i]
+                            cam_gt_bboxes = gt_bbox[0:1, (i*9, i*9+1, i*9+3, i*9+5)] #(num_gt, 4) #(cx cy w h)
+                            cam_det_bboxes = all_bbox_preds[jj:jj+1, (i*9, i*9+1, i*9+3, i*9+5)] #(num_pred, 4) #(cx cy w h)
+
+                            cam_det_bboxes[:, 0] = cam_det_bboxes[:, 0] * input_img_w
+                            cam_det_bboxes[:, 1] = cam_det_bboxes[:, 1] * input_img_h
+                            cam_gt_bboxes[:, 0] = cam_gt_bboxes[:, 0] * input_img_w
+                            cam_gt_bboxes[:, 1] = cam_gt_bboxes[:, 1] * input_img_h
+
+                            img = img.cpu().numpy().astype(np.uint8)
+                            img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, 1)
+                            img_list.append(img)
+                        img = np.concatenate(img_list, axis=0)
+
+                        result_path = os.path.join('/data3/sap/VEDet/result/messytable10_debug', 'all_pred_%d.jpg'%(jj))
+                        mmcv.imwrite(img, result_path)
+
+
+                is_draw_target_gt_pred = True
+                if is_draw_target_gt_pred : 
+                    for jj in range(len(gt_bbox)) :
+                        img_list = []
+                        imgs = self.img_metas[0]['img'][0].permute(0, 2, 3, 1)
+                        for i in range(self.num_decode_views) :
+                            img = imgs[i]
+                            cam_gt_bboxes = gt_bbox[jj:jj+1, (i*9, i*9+1, i*9+3, i*9+5)] #(num_gt, 4) #(cx cy w h)
+
+                            cam_det_bboxes = show_bbox_preds[jj:jj+1, (i*9, i*9+1, i*9+3, i*9+5)] #(num_pred, 4) #(cx cy w h)
+
+                            cam_det_bboxes[:, 0] = cam_det_bboxes[:, 0] * input_img_w
+                            cam_det_bboxes[:, 1] = cam_det_bboxes[:, 1] * input_img_h
+                            cam_gt_bboxes[:, 0] = cam_gt_bboxes[:, 0] * input_img_w
+                            cam_gt_bboxes[:, 1] = cam_gt_bboxes[:, 1] * input_img_h
+
+                            img = img.cpu().numpy().astype(np.uint8)
+                            img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, 1)
+                            img_list.append(img)
+                        img = np.concatenate(img_list, axis=0)
+
+                        result_path = os.path.join('/data3/sap/VEDet/result/messytable10_debug', 'target_gt_pred_%d_%d.jpg'%(jj, gt_labels[jj]))
+                        mmcv.imwrite(img, result_path)
+
+                is_draw_each_inst = True
+                if is_draw_each_inst : 
+                    pred_cls_scores, pred_labels = F.softmax(cls_scores, dim=-1)[..., :-1].max(-1)
+                    show_bbox_preds = denormalize_bbox(bbox_preds, self.pc_range)[:, 9:]
+                    for k in range(len(gt_labels)) :
+                        same_cls_idx =  (gt_labels[k] == pred_labels)
+                        cur_gt_bbox = gt_bbox[k:k+1]
+                        cur_show_bbox_preds = show_bbox_preds[same_cls_idx]
+
+                        cam_det_cls = pred_labels[same_cls_idx].cpu().numpy().astype('str') #(num_pred,) #str
+                        cam_det_score = cls_scores_sig[same_cls_idx][:, gt_labels[k]] #(num_pred,) #float
+
+                        cam_gt_cls = gt_labels[k:k+1].cpu().numpy().astype('str') #(num_gt, ) #str
+
+                        img_list = []
+                        imgs = self.img_metas[0]['img'][0].permute(0, 2, 3, 1)
+                        for i in range(self.num_decode_views) :
+                            img = imgs[i]
+                            cam_gt_bboxes = cur_gt_bbox[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_gt, 4) #(cx cy w h)
+
+                            cam_det_bboxes = cur_show_bbox_preds[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_pred, 4) #(cx cy w h)
+
+                            cam_det_bboxes[:, 0] = cam_det_bboxes[:, 0] * input_img_w
+                            cam_det_bboxes[:, 1] = cam_det_bboxes[:, 1] * input_img_h
+                            cam_gt_bboxes[:, 0] = cam_gt_bboxes[:, 0] * input_img_w
+                            cam_gt_bboxes[:, 1] = cam_gt_bboxes[:, 1] * input_img_h
+
+                            img = img.cpu().numpy().astype(np.uint8)
+                            img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, 1)
+                            img_list.append(img)
+                        img = np.concatenate(img_list, axis=0)
+
+                        result_path = os.path.join('/data3/sap/VEDet/result/messytable10_debug', 'cls_%d.jpg'%(gt_labels[k].item()))
+                        mmcv.imwrite(img, result_path)
+
+                        for j in range(len(cur_show_bbox_preds)) :
+                            img_list = []
+                            imgs = self.img_metas[0]['img'][0].permute(0, 2, 3, 1)
+                            for i in range(self.num_decode_views) :
+                                img = imgs[i]
+                                cam_gt_bboxes = cur_gt_bbox[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_gt, 4) #(cx cy w h)
+
+                                cam_det_bboxes = cur_show_bbox_preds[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_pred, 4) #(cx cy w h)
+
+                                cam_det_bboxes[:, 0] = cam_det_bboxes[:, 0] * input_img_w
+                                cam_det_bboxes[:, 1] = cam_det_bboxes[:, 1] * input_img_h
+                                cam_gt_bboxes[:, 0] = cam_gt_bboxes[:, 0] * input_img_w
+                                cam_gt_bboxes[:, 1] = cam_gt_bboxes[:, 1] * input_img_h
+
+                                img = img.cpu().numpy().astype(np.uint8)
+                                img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes[j:j+1], cam_det_cls[j:j+1], cam_det_score[j:j+1], 1)
+                                img_list.append(img)
+                            img = np.concatenate(img_list, axis=0)
+
+                            result_path = os.path.join('/data3/sap/VEDet/result/messytable10_debug', 'cls_%d_%d.jpg'%(gt_labels[k].item(), j))
+                            mmcv.imwrite(img, result_path)
+
+                show_bbox_preds = bbox_preds[target_idx]
+                show_bbox_preds = denormalize_bbox(show_bbox_preds, self.pc_range)[:, 9:]
+
+                gt_labels = labels[target_idx]
+                gt_bbox = bbox_targets[target_idx][:, 9:]
+
+                norm_target = normalized_bbox_targets[target_idx]
+                norm_pred = bbox_preds[target_idx]
+                wgt = bbox_weights[target_idx]
+
+                diff = norm_target - norm_pred
+                wgted_diff = diff * wgt
+                wgted_diff = wgted_diff[:, 10:]
+                wgted_diff = wgted_diff[:, (0, 1, 2, 5, 10, 11, 12, 15, 20, 21, 22, 25)] #x,y,w,h
+                wgted_diff = torch.reshape(wgted_diff, (-1, 3, 4))
+
+                diff = diff[:, 10:]
+                diff = diff[:, (0, 1, 2, 5, 10, 11, 12, 15, 20, 21, 22, 25)] #x,y,w,h
+                diff = torch.reshape(diff, (-1, 3, 4))
+
+                print_label = pred_labels[target_idx]
+            
+                target_bbox_coord_idx = []
+                for i in range(1, self.num_decode_views+1) :
+                    target_bbox_coord_idx.extend([i*10, i*10+1, i*10+2, i*10+5])
+
+                print(wgted_diff)
+                print(wgted_diff.abs().mean())
+
+                #target_idx = torch.unique(torch.where(bbox_targets!=0)[0])
+
             loss_bbox = self.loss_bbox(
                 bbox_preds[isnotnan],
                 normalized_bbox_targets[isnotnan],
@@ -624,6 +818,12 @@ class TMVDetHead(VEDetHead):
                         torch.cat((torch.zeros((len(gt_bboxes.mtv_targets), 9)), gt_bboxes.mtv_targets),
                                   dim=1).to(device) for gt_bboxes in gt_bboxes_list
                     ]
+
+                    input_img_h, input_img_w, _ = self.img_metas[0]['pad_shape'][0]
+                    for gt_bboxes in gt_bboxes_list :
+                        gt_bboxes[..., 0::9] = gt_bboxes[..., 0::9] / input_img_w
+                        gt_bboxes[..., 1::9] = gt_bboxes[..., 1::9] / input_img_h
+
                 else:
                     gt_bboxes_list = [
                         torch.cat(([0]*9), dim=1).to(device)

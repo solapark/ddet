@@ -26,7 +26,7 @@ from .vedet import VEDet
 class TMVDet(VEDet):
     def simple_test_pts(self, x, img_metas, gt_map=None, rescale=False):
         """Test function of point cloud branch."""
-        outs = self.pts_bbox_head(x, img_metas)
+        outs = self.pts_bbox_head(x, img_metas, is_test=True)
         results = dict()
         if outs.get('all_cls_scores', None) is not None:
             bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas, rescale=rescale)

@@ -14,7 +14,7 @@ import numpy as np
 
 from mmdet.core.bbox import BaseBBoxCoder
 from mmdet.core.bbox.builder import BBOX_CODERS
-from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox
+from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox, cxcywh2x1y1x2y2, x1y1x2y22cxcywh
 import torch.nn.functional as F
 
 @BBOX_CODERS.register_module()
@@ -115,11 +115,11 @@ class TMVDetNMSCoder(BaseBBoxCoder):
         num_bbox, _  = boxes3d.shape
         boxes3d = boxes3d.reshape(num_bbox, self.num_views+1, 9) #(300, num_views+1, 9)
         boxes3d = boxes3d[:, 1:, [0, 1, 3, 5]] #(300, num_views, 4) #cxcywh
-        boxes3d = self.cxcywh2x1y1x2y2(boxes3d) 
+        boxes3d = cxcywh2x1y1x2y2(boxes3d) 
 
         boxes3d, scores, visibles, labels = self.nms_classwise(boxes3d, scores, visibles, labels, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
         
-        boxes3d = self.x1y1x2y22cxcywh(boxes3d) #(N, num_views, 4)
+        boxes3d = x1y1x2y22cxcywh(boxes3d) #(N, num_views, 4)
         num_bbox = len(boxes3d)
         final_boxes3d = boxes3d.new_zeros(num_bbox, self.num_views+1, 9)
         final_boxes3d[:, 1:, [0, 1, 3, 5]] = boxes3d
@@ -233,40 +233,6 @@ class TMVDetNMSCoder(BaseBBoxCoder):
             return boxes, probs, is_valids, emb_dists
         else:
             return boxes, probs, is_valids
-
-    def cxcywh2x1y1x2y2(self, boxes):
-        """
-        Convert bounding boxes from (cx, cy, w, h) format to (x1, y1, x2, y2) format.
-
-        Args:
-            boxes (torch.Tensor): Bounding boxes in (cx, cy, w, h) format.
-
-        Returns:
-            torch.Tensor: Bounding boxes in (x1, y1, x2, y2) format.
-        """
-        x1 = boxes[..., 0] - boxes[..., 2] / 2
-        y1 = boxes[..., 1] - boxes[..., 3] / 2
-        x2 = boxes[..., 0] + boxes[..., 2] / 2
-        y2 = boxes[..., 1] + boxes[..., 3] / 2
-
-        return torch.stack((x1, y1, x2, y2), dim=-1)
-
-    def x1y1x2y22cxcywh(self, boxes):
-        """
-        Convert bounding boxes from (x1, y1, x2, y2) format to (cx, cy, w, h) format.
-
-        Args:
-            boxes (torch.Tensor): Bounding boxes in (x1, y1, x2, y2) format.
-
-        Returns:
-            torch.Tensor: Bounding boxes in (cx, cy, w, h) format.
-        """
-        cx = (boxes[..., 0] + boxes[..., 2]) / 2
-        cy = (boxes[..., 1] + boxes[..., 3]) / 2
-        w = boxes[..., 2] - boxes[..., 0]
-        h = boxes[..., 3] - boxes[..., 1]
-
-        return torch.stack((cx, cy, w, h), dim=-1)
 
     def nms_classwise(self, boxes, scores, visibles, labels, overlap_thresh=0.9, max_boxes=300):
         unique_labels = torch.unique(labels)  # Get unique class labels

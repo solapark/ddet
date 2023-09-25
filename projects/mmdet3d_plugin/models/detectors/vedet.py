@@ -152,6 +152,7 @@ class VEDet(MVXTwoStageDetector):
 
         img_feats = self.extract_feat(img=img, img_metas=img_metas)
 
+        img_metas[0]['img'] = img
         losses = dict()
         losses_pts = self.forward_pts_train(img_feats, gt_bboxes_3d, gt_labels_3d, maps, img_metas)
         losses.update(losses_pts)

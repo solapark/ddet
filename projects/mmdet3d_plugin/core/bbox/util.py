@@ -35,6 +35,15 @@ def points_img2cam(points, cam2img):
 
     return points3D
 
+def normalize_pc3d(pc, pc_range) : 
+    divider = torch.tensor([pc_range[3] - pc_range[0], pc_range[4] - pc_range[1], pc_range[5] - pc_range[2]], device=pc.device)
+    subtract = torch.tensor([pc_range[0], pc_range[1], pc_range[2]], device=pc.device)
+    return (pc - subtract) / (divider + 1e-6)
+
+def denormalize_pc3d(pc, pc_range) : 
+    divider = torch.tensor([pc_range[3] - pc_range[0], pc_range[4] - pc_range[1], pc_range[5] - pc_range[2]], device=pc.device)
+    subtract = torch.tensor([pc_range[0], pc_range[1], pc_range[2]], device=pc.device)
+    return pc * divider + subtract
 
 def normalize_bbox(bboxes, pc_range):
     include_velocity = (bboxes.shape[-1] % 9 == 0)

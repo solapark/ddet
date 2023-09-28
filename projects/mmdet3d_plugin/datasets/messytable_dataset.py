@@ -162,7 +162,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         world2img_rts = []
         intrinsics = []
         extrinsics = []
-        for cam_type, cam_info in info['cams'].items():
+        for i, (cam_type, cam_info) in enumerate(info['cams'].items()):
+            if i == self.num_views : break
             image_paths.append(cam_info['img_path'])
             intrinsics.append(cam_info['intrinsic'])
             extrinsics.append(cam_info['extrinsic'])

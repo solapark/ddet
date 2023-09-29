@@ -56,12 +56,14 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
                  visible_cost=dict(type='ClassificationCost', weight=1.),
                  reg_cost=dict(type='BBoxL1Cost', weight=1.0),
                  iou_cost=dict(type='IoUCost', weight=0.0),
+                 query_cost=dict(type='QueryCost', weight=1.0),
                  align_with_loss=False,
                  pc_range=None):
         self.cls_cost = build_match_cost(cls_cost)
         self.visible_cost = build_match_cost(visible_cost)
         self.reg_cost = build_match_cost(reg_cost)
         self.iou_cost = build_match_cost(iou_cost)
+        self.query_cost = build_match_cost(query_cost)
         self.align_with_loss = align_with_loss
         self.pc_range = pc_range
 

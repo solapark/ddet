@@ -164,3 +164,39 @@ class LoadMultiViewImageFromMultiSweepsFiles(object):
         repr_str += f'(to_float32={self.to_float32}, '
         repr_str += f"color_type='{self.color_type}')"
         return repr_str
+
+@PIPELINES.register_module()
+class LoadMultiViewRpnFromFiles(object):
+    """Load multi channel images from a list of separate channel files.
+
+    Expects results['img_filename'] to be a list of filenames.
+
+    Args:
+        to_float32 (bool): Whether to convert the img to float32.
+            Defaults to False.
+        color_type (str): Color type of the file. Defaults to 'unchanged'.
+    """
+
+    def __init__(self):
+        pass 
+
+    def __call__(self, results):
+        filename = results['pickle_path']
+        with open(filename, 'rb') as f:
+            pred_box, pred_box_emb, pred_box_prob, img_size = pickle.load(f) 
+        strideW, strideH = img_size
+        pred_box[..., [0,2]] *= strideW
+        pred_box[..., [1,3]] *= strideH
+
+        results['pickle_path'] = pickle_path
+        results['rpn_x1y1x2y2'] = pred_box #(300,3,4) x1y1x2y2
+        results['rpn_emb'] = pred_box_emb.astype(np.float32) #(300,3,128)
+        results['rpn_prob'] = pred_box_prob #(300,3)
+        return results
+
+    def __repr__(self):
+        """str: Return a string that describes the module."""
+        repr_str = self.__class__.__name__
+        return repr_str
+
+

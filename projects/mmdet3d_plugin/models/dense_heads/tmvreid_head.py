@@ -442,10 +442,9 @@ class TMVReidHead(TMVDetHead):
         reid_weights = reid_score.new_ones(num_bboxes) #(900, )
 
         # idx targets
-        idx_targets = gt_idx.new_full((num_bboxes, ), self.num_feats, dtype=torch.long) #(900, ) = 300
+        idx_targets = gt_idx.new_full(visible_score.shape, self.num_feats, dtype=torch.long) #(900, 3) = 300
         idx_targets[pos_inds] = gt_idx[sampling_result.pos_assigned_gt_inds]
-        idx_weights = gt_idx.new_zeros(num_bboxes) #(900, )
-        idx_weights[pos_inds] = 1.0 
+        idx_weights = visible_weights #(900, 3)
 
         # bbox targets for debugging
         bbox_targets = torch.zeros_like(bbox_pred)
@@ -545,7 +544,7 @@ class TMVReidHead(TMVDetHead):
             label_weights = torch.cat(label_weights_list, 0)
             visibles = torch.cat(visibles_list, 0)
             visible_weights = torch.cat(visible_weights_list, 0)
-            reid = torch.cat(reid_list, 0)
+            reids = torch.cat(reid_list, 0)
             reid_weights = torch.cat(reid_weights_list, 0)
             idx = torch.cat(idx_list, 0)
             idx_weights = torch.cat(idx_weights_list, 0)
@@ -553,7 +552,7 @@ class TMVReidHead(TMVDetHead):
             bbox_weights = torch.cat(bbox_weights_list, 0)
 
             # classification loss
-            cls_scores = cls_scores.reshape(-1, self.cls_out_channels)
+            cls_scores = cls_scores.reshape(-1, self.cls_out_channels) #(900, 120)
             # construct weighted avg_factor to match with the official DETR repo
             cls_avg_factor = num_total_pos * 1.0 + \
                 num_total_neg * self.bg_cls_weight
@@ -564,10 +563,10 @@ class TMVReidHead(TMVDetHead):
             loss_cls = self.loss_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
 
             # visible loss
-            visible_scores = visible_scores.reshape(-1, self.num_decode_views) #(900, 2)
+            visible_scores = visible_scores.reshape(-1, self.num_decode_views) #(900, 3)
             # construct weighted avg_factor to match with the official DETR repo
             num_total_pos_visible = (1-visibles).sum() # 39
-            num_total_neg_visible = num_total_pos * self.num_decode_views - num_total_pos_visible # 21*2 - 39
+            num_total_neg_visible = num_total_pos * self.num_decode_views - num_total_pos_visible # 21*3 - 39
             visible_cls_avg_factor = num_total_pos_visible * 1.0 + \
                 num_total_neg_visible * self.bg_cls_weight
             if self.sync_cls_avg_factor:
@@ -576,11 +575,28 @@ class TMVReidHead(TMVDetHead):
             visible_cls_avg_factor = max(visible_cls_avg_factor, 1)
             loss_visible = self.loss_visible(visible_scores.reshape(-1,1), visibles.reshape(-1,), visible_weights.reshape(-1,), avg_factor=visible_cls_avg_factor)
 
+            # reid loss
+            reid_scores = reid_scores.reshape(-1, self.reid_out_channels) #(900, 1)
+            # construct weighted avg_factor to match with the official DETR repo
+            reid_avg_factor = num_total_pos * 1.0 + \ #num_pos * 1 + num_neg * 0 = num_pos
+                 num_total_neg * self.bg_cls_weight
+            reid_avg_factor = max(reid_avg_factor, 1)
+            loss_reid = self.loss_reid(reid_scores, reids, reid_weights, avg_factor=reid_avg_factor)
+
+            # idx loss
+            idx_scores = idx_scores.reshape(-1, self.idx_out_channels) #(900*3, 300)
+            idx = idx.reshape(-1,) #(900*3, )
+            idx_weights = idx_weights.reshape(-1, ) #(900*3, )
+            # construct weighted avg_factor to match with the official DETR repo
+            idx_avg_factor = visible_cls_avg_factor
+            loss_idx = self.loss_idx(idx_scores, idx, idx_weights, avg_factor=idx_avg_factor)
+
             # Compute the average number of gt boxes accross all gpus, for
             # normalization purposes
             num_total_pos = loss_cls.new_tensor([num_total_pos])
             num_total_pos = torch.clamp(reduce_mean(num_total_pos), min=1).item()
 
+            '''
             # regression L1 loss
             bbox_preds = bbox_preds.reshape(-1, bbox_preds.size(-1))
             normalized_bbox_targets = normalize_bbox(bbox_targets, self.pc_range)
@@ -594,6 +610,7 @@ class TMVReidHead(TMVDetHead):
             #input_img_h, input_img_w, _ = self.img_metas[0]['pad_shape'][0]
             #normalized_bbox_targets[..., 0::10] = normalized_bbox_targets[..., 0::10] / input_img_w
             #normalized_bbox_targets[..., 1::10] = normalized_bbox_targets[..., 1::10] / input_img_h
+            '''
 
             if self.debug :
                 import torch.nn.functional as F
@@ -867,37 +884,9 @@ class TMVReidHead(TMVDetHead):
                     for gt_bboxes in gt_bboxes_list
                 ]
 
-                if hasattr(gt_bboxes_list[0], 'mtv_targets'):
-                    gt_bboxes_list = [
-                        torch.cat((torch.zeros((len(gt_bboxes.mtv_targets), 9)), gt_bboxes.mtv_targets),
-                                  dim=1).to(device) for gt_bboxes in gt_bboxes_list
-                    ]
-                else:
-                    gt_bboxes_list = [
-                        torch.cat(([0]*9), dim=1).to(device)
-                        for gt_bboxes in gt_bboxes_list
-                    ]
-
-                if hasattr(gt_bboxes_list[0], 'mtv_targets_idx'):
-                    gt_idx_list = [
-                        gt_bboxes.mtv_targets_idx.to(device) for gt_bboxes in gt_bboxes_list
-                    ]
-                else:
-                    gt_idx_list = [
-                        torch.cat(([0]*num_dec_layers), dim=1).to(device)
-                        for gt_bboxes in gt_bboxes_list
-                    ]
-
-                if hasattr(gt_bboxes_list[0], 'mtv_targets_proj_cxcy'):
-                    gt_idx_list = [
-                        gt_bboxes.mtv_targets_proj_cxcy.to(device) for gt_bboxes in gt_bboxes_list
-                    ]
-                else:
-                    gt_idx_list = [
-                        torch.cat(([0]*num_dec_layers), dim=1).to(device)
-                        for gt_bboxes in gt_bboxes_list
-                    ]
-
+                gt_bboxes_list = [ gt_bboxes.mtv_targets.to(device) for gt_bboxes in gt_bboxes_list ]
+                gt_idx_list = [ gt_bboxes.mtv_targets_idx.to(device) for gt_bboxes in gt_bboxes_list ]
+                gt_idx_list = [ gt_bboxes.mtv_targets_proj_cxcy.to(device) for gt_bboxes in gt_bboxes_list ]
 
                 all_gt_bboxes_list = [gt_bboxes_list for _ in range(num_dec_layers)]
                 all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]

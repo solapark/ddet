@@ -1121,6 +1121,7 @@ class LoadMultiviewTargets(object):
 
     def __init__(self,
                  num_views=2,
+                 rpn_mode=False,
                  keyframe_only=True) -> None:
         self.num_views = num_views
         self.keyframe_only = keyframe_only
@@ -1157,13 +1158,21 @@ class LoadMultiviewTargets(object):
         if num_targets > 0:
             targets_all = np.stack(targets_all).transpose(1, 0, 2).reshape(num_targets, -1)
             masks_all = np.stack(masks_all).transpose(1, 0)
+            if rpn_mode :
+                inst_proj_2dp_all = results['inst_proj_2dp'].astype(np.float32) #(num_targets, 3, 2)
+                pred_box_idx_all = results['pred_box_idx'].astype(np.long) #(num_targets, 3)
         else:
             targets_all = np.zeros((num_targets, num_views * 4), dtype=extr.dtype)
             masks_all = np.zeros((num_targets), dtype=extr.dtype)
-
+            if rpn_mode :
+                inst_proj_2dp_all = np.zeros((num_targets, num_views, 2), dtype=extr.dtype)
+                pred_box_idx_all = np.zeros((num_targets, num_views), dtype=extr.dtype)
+ 
         if 'gt_bboxes_3d' in results:
             results['gt_bboxes_3d'].mtv_targets = torch.as_tensor(targets_all) #(num_targets, num_views*9)
             results['gt_bboxes_3d'].mtv_visibility = torch.as_tensor(masks_all) #(num_targets, num_views)
+            results['gt_bboxes_3d'].mtv_targets_proj_cxcy = torch.as_tensor(inst_proj_2dp_all) #(num_targets, num_views)
+            results['gt_bboxes_3d'].mtv_targets_idx = torch.as_tensor(pred_box_idx_all) #(num_targets, num_views)
         results['dec_extrinsics'] = dec_extrinsics
 
         return results

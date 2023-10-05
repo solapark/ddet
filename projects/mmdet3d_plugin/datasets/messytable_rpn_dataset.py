@@ -14,7 +14,7 @@ from ..core.visualization.show_result_mtv2d import show_result_mtv2d
 #from ..core.bbox import Box3DMode, Coord3DMode, LiDARInstance3DBoxes
 from mmdet3d.core.bbox import LiDARInstance3DBoxes
 #from ..core.bbox.structures.mtv_boxes2d import MtvBoxes2D
-from .custom_mtv2d import CustomMtv2DDataset
+from .messytable_dataset import CustomMessytableDataset
 from mmdet3d.datasets.pipelines import Compose
 
 

@@ -9,5 +9,6 @@
 # ------------------------------------------------------------------------
 from .nuscenes_dataset import CustomNuScenesDataset
 from .messytable_dataset import CustomMessytableDataset
+from .messytable_rpn_dataset import CustomMessytableRpnDataset
 
-__all__ = ['CustomNuScenesDataset', 'CustomMessytableDataset']
+__all__ = ['CustomNuScenesDataset', 'CustomMessytableDataset', 'CustomMessytableRpnDataset']

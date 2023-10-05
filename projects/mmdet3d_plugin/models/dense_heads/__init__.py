@@ -3,5 +3,6 @@
 # ------------------------------------------------------------------------
 from .vedet_head import VEDetHead
 from .tmvdet_head import TMVDetHead
+from .tmvreid_head import TMVReidHead
 
-__all__ = ['VEDetHead', 'TMVDetHead']
+__all__ = ['VEDetHead', 'TMVDetHead', 'TMVReidHead']

@@ -156,6 +156,10 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             gt_names=info['gt_names'],
             cam_instances=info['cam_instances'],
             cam_instances_valid_flags=info['cam_instances_valid_flags'],
+            inst_3dp=info['inst_3dp'], 
+            inst_proj_2dp=info['inst_proj_2dp'], 
+            pred_box_idx=info['pred_box_idx'], 
+            probs=info['probs'], 
         )
 
         image_paths = []

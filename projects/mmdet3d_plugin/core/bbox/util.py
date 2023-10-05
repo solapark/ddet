@@ -1,4 +1,5 @@
 import torch
+from copy import deepcopy
 from .array_converter import array_converter
 
 
@@ -123,12 +124,13 @@ def cxcywh2x1y1x2y2(boxes):
     Returns:
         torch.Tensor: Bounding boxes in (x1, y1, x2, y2) format.
     """
-    x1 = boxes[..., 0] - boxes[..., 2] / 2
-    y1 = boxes[..., 1] - boxes[..., 3] / 2
-    x2 = boxes[..., 0] + boxes[..., 2] / 2
-    y2 = boxes[..., 1] + boxes[..., 3] / 2
+    new_bboxes = deepcopy(boxes)
+    new_bboxes[..., 0] = boxes[..., 0] - boxes[..., 2] / 2
+    new_bboxes[..., 1] = boxes[..., 1] - boxes[..., 3] / 2
+    new_bboxes[..., 2] = boxes[..., 0] + boxes[..., 2] / 2
+    new_bboxes[..., 3] = boxes[..., 1] + boxes[..., 3] / 2
 
-    return torch.stack((x1, y1, x2, y2), dim=-1)
+    return new_bboxes
 
 def x1y1x2y22cxcywh(boxes):
     """
@@ -140,11 +142,31 @@ def x1y1x2y22cxcywh(boxes):
     Returns:
         torch.Tensor: Bounding boxes in (cx, cy, w, h) format.
     """
-    cx = (boxes[..., 0] + boxes[..., 2]) / 2
-    cy = (boxes[..., 1] + boxes[..., 3]) / 2
-    w = boxes[..., 2] - boxes[..., 0]
-    h = boxes[..., 3] - boxes[..., 1]
+    new_bboxes = deepcopy(boxes)
+    new_bboxes[..., 0] = (boxes[..., 0] + boxes[..., 2]) / 2
+    new_bboxes[..., 1] = (boxes[..., 1] + boxes[..., 3]) / 2
+    new_bboxes[..., 2] = boxes[..., 2] - boxes[..., 0]
+    new_bboxes[..., 3] = boxes[..., 3] - boxes[..., 1]
 
-    return torch.stack((cx, cy, w, h), dim=-1)
+    return new_bboxes
+
+def get_box_form_pred_idx(bboxes, idx, num_views):
+    """
+    Get bounding boxes from idx.
+
+    Args:
+        bboxes (torch.Tensor): Bounding boxes in (cx, cy, w, h) format.
+            shape #(num_bboxs, num_view, 4)
+        idx (torch.Tensor): Bounding boxes idx in (idx in 1st view, idx in 2nd view, idx in 3rd view) format.
+            shape #(num_idx, num_view)
+    Returns:
+        torch.Tensor: Bounding boxes in (cx, cy, w, h) format.
+            shape #(num_idx, num_view, 4)
+    """
+    num_target = idx.size(0) 
+    cam_idx = torch.arange(num_views).repeat(num_target, 1).flatten(0,1) #(3, )->(num_target, 3)->(num_target*3, )
+    target_idx = idx.flatten(0,1) #(num_target*3, )
+    bbox_targets = bboxes[target_idx, cam_idx].reshape(num_target, num_views, -1) #(num_target*3, 4)->(num_target, 3, 4)
+    return bbox_targets
 
 

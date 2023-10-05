@@ -1124,6 +1124,7 @@ class LoadMultiviewTargets(object):
                  rpn_mode=False,
                  keyframe_only=True) -> None:
         self.num_views = num_views
+        self.rpn_mode = rpn_mode
         self.keyframe_only = keyframe_only
 
     def __call__(self, results) -> None:
@@ -1158,13 +1159,13 @@ class LoadMultiviewTargets(object):
         if num_targets > 0:
             targets_all = np.stack(targets_all).transpose(1, 0, 2).reshape(num_targets, -1)
             masks_all = np.stack(masks_all).transpose(1, 0)
-            if rpn_mode :
+            if self.rpn_mode :
                 inst_proj_2dp_all = results['inst_proj_2dp'].astype(np.float32) #(num_targets, 3, 2)
                 pred_box_idx_all = results['pred_box_idx'].astype(np.long) #(num_targets, 3)
         else:
             targets_all = np.zeros((num_targets, num_views * 4), dtype=extr.dtype)
             masks_all = np.zeros((num_targets), dtype=extr.dtype)
-            if rpn_mode :
+            if self.rpn_mode :
                 inst_proj_2dp_all = np.zeros((num_targets, num_views, 2), dtype=extr.dtype)
                 pred_box_idx_all = np.zeros((num_targets, num_views), dtype=extr.dtype)
  

@@ -11,6 +11,9 @@ def show_result_mtv2d(data_root,
                 eval_thresh, 
                 show=True,
                 show_gt=True,
+                show_pred=True,
+                draw_inst_by_inst=True,
+                tail='',
                 wait_time=0):
     """Convert results into format that is directly readable for meshlab.
 
@@ -40,14 +43,29 @@ def show_result_mtv2d(data_root,
         cam_det_cls = det_cls[cam_det_is_valids] #(num_pred,) #str 
         cam_det_score = det_score[cam_det_is_valids] #(num_pred,) #float
 
-        img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, show_gt)
+        img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, show_gt, show_pred)
         img_list.append(img)
     img = np.concatenate(img_list, axis=0)
 
-    result_path = osp.join(out_dir, '%s.jpg'%(scene_id))
+    result_path = osp.join(out_dir, '%s%s.jpg'%(scene_id, tail))
     mmcv.imwrite(img, result_path)
 
-def imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, show_gt=True):
+    if draw_inst_by_inst :
+        if show_pred :
+            for i in range(len(det_cls)) :
+                show_gt=False
+                tail = '_%02d'%(i)
+                result = scene_id, gt_bboxes, gt_is_valids, gt_cls, det_bboxes[:, i:i+1], det_is_valids[:, i:i+1], det_cls[i:i+1], det_score[i:i+1] 
+                show_result_mtv2d(data_root, out_dir, result, eval_thresh, show=show, show_gt=show_gt, show_pred=show_pred, draw_inst_by_inst=False, tail=tail, wait_time=wait_time)
+
+        else :
+            for i in range(len(gt_cls)) :
+                show_gt=True
+                tail = '_%02d'%(i)
+                result = scene_id, gt_bboxes[:, i:i+1], gt_is_valids[:, i:i+1], gt_cls[i:i+1], det_bboxes, det_is_valids, det_cls, det_score
+                show_result_mtv2d(data_root, out_dir, result, eval_thresh, show=show, show_gt=show_gt, show_pred=show_pred, draw_inst_by_inst=False, tail=tail, wait_time=wait_time)
+   
+def imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, show_gt=True, show_pred=True):
     # Make a copy of the image to draw bounding boxes on
     img_with_bboxes = img.copy()
 
@@ -61,11 +79,12 @@ def imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
     # Draw detected bounding boxes
-    for bbox, cls, score in zip(cam_det_bboxes, cam_det_cls, cam_det_score):
-        x, y, w, h = bbox
-        color = (0, 0, 255)  # Red color for detected
-        cv2.rectangle(img_with_bboxes, (int(x - w / 2), int(y - h / 2)), (int(x + w / 2), int(y + h / 2)), color, 2)
-        cv2.putText(img_with_bboxes, f'{cls}: {score:.2f}', (int(x - w / 2), int(y - h / 2) - 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+    if show_pred :
+        for bbox, cls, score in zip(cam_det_bboxes, cam_det_cls, cam_det_score):
+            x, y, w, h = bbox
+            color = (0, 0, 255)  # Red color for detected
+            cv2.rectangle(img_with_bboxes, (int(x - w / 2), int(y - h / 2)), (int(x + w / 2), int(y + h / 2)), color, 2)
+            cv2.putText(img_with_bboxes, f'{cls}: {score:.2f}', (int(x - w / 2), int(y - h / 2) - 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
     return img_with_bboxes

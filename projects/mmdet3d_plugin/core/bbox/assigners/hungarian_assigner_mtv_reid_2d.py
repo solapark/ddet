@@ -67,7 +67,7 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
         self.align_with_loss = align_with_loss
         self.pc_range = pc_range
 
-    def assign(self, bbox_pred, cls_pred, visible_pred, reid_pred, idx_pred, gt_bboxes, gt_labels, gt_visibles, gt_idx, gt_proj_cxcy, gt_bboxes_ignore=None, code_weights=None, eps=1e-7, img_shape=None):
+    def assign(self, norm_pred_cxcy, cls_pred, visible_pred, reid_pred, idx_pred, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore=None, eps=1e-7, img_shape=None):
         """Computes one-to-one matching based on the weighted costs.
         This method assign each query prediction to a ground truth or
         background. The `assigned_gt_inds` with -1 means don't care,
@@ -98,11 +98,11 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
         """
         assert gt_bboxes_ignore is None, \
             'Only case when gt_bboxes_ignore is None is supported.'
-        num_gts, num_bboxes = gt_bboxes.size(0), bbox_pred.size(0) #num_gt, num_pred
+        num_gts, num_bboxes = gt_proj_cxcy.size(0), norm_pred_cxcy.size(0) #num_gt, num_pred
 
         # 1. assign -1 by default
-        assigned_gt_inds = bbox_pred.new_full((num_bboxes, ), -1, dtype=torch.long) #(900, )
-        assigned_labels = bbox_pred.new_full((num_bboxes, ), -1, dtype=torch.long) #(900, )
+        assigned_gt_inds = cls_pred.new_full((num_bboxes, ), -1, dtype=torch.long) #(900, )
+        assigned_labels = cls_pred.new_full((num_bboxes, ), -1, dtype=torch.long) #(900, )
         if num_gts == 0 or num_bboxes == 0:
             # No ground truth or boxes, return empty assignment
             if num_gts == 0:
@@ -134,7 +134,7 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
             normalized_gt_cxcy[..., 0] /= W
             normalized_gt_cxcy[..., 1] /= H
             normalized_gt_cxcy = torch.nan_to_num(normalized_gt_cxcy).flatten(1,2) #(num_inst, num_cam*2)
-            query_cost = self.query_cost(query2d_norm, normalized_gt_cxcy, 1-gt_visibles)
+            query_cost = self.query_cost(norm_pred_cxcy, normalized_gt_cxcy, 1-gt_visibles)
             cost = cost + query_cost
 
         # 3. do Hungarian matching on CPU using linear_sum_assignment
@@ -144,8 +144,8 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
                               'to install scipy first.')
         cost = torch.nan_to_num(cost, nan=100.0, posinf=100.0, neginf=-100.0)
         matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
-        matched_row_inds = torch.from_numpy(matched_row_inds).to(bbox_pred.device)
-        matched_col_inds = torch.from_numpy(matched_col_inds).to(bbox_pred.device)
+        matched_row_inds = torch.from_numpy(matched_row_inds).to(cls_pred.device)
+        matched_col_inds = torch.from_numpy(matched_col_inds).to(cls_pred.device)
 
         # 4. assign backgrounds and foregrounds
         # assign all indices to backgrounds first

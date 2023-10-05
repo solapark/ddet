@@ -11,7 +11,7 @@ from mmcv.runner.base_module import BaseModule
 from .vedet_transformer import VETransformer
 
 @TRANSFORMER.register_module()
-class TMvdetTransformer(VETransformer):
+class TMvReidTransformer(VETransformer):
     """Implements the DETR transformer.
     Following the official DETR implementation, this module copy-paste
     from torch.nn.Transformer with modifications:
@@ -59,9 +59,9 @@ class TMvdetTransformer(VETransformer):
                 - memory: Output results from encoder, with shape \
                       [bs, embed_dims, h, w].
         """
-        bs, n, hw, c = x.shape #1, 3, 300*1, 132
-        x = x.reshape(bs, n * hw, c) #(1, 3*300*1, 132)
-        x_pos = x_pos.reshape(bs, n * hw, -1) #(1, 3*300*1, 132)
+        bs, n, hw, c = x.shape #1, 3, 300*1, 256
+        x = x.reshape(bs, n * hw, c) #(1, 3*300*1, 256)
+        x_pos = x_pos.reshape(bs, n * hw, -1) #(1, 3*300*1, 256)
 
         mask = mask.view(bs, -1)  # [bs, n, h*w] -> [bs, n*h*w] #(1, 3*300*1)
 
@@ -87,7 +87,7 @@ class TMvdetTransformer(VETransformer):
         # detection decoders
         det_outputs, regs = [], []
         if self.det_decoders is not None:
-            memory = x.transpose(0, 1) #(3*300*1, 1, 132)
+            memory = x.transpose(0, 1) #(3*300*1, 1, 256)
             attn_masks = [None, None]
             num_query = init_det_points.shape[-2] #900
             total_num = num_query * num_decode_views #900*3 
@@ -108,11 +108,9 @@ class TMvdetTransformer(VETransformer):
         B, V, Q, C = init_det_points_mtv.shape #1, 3, 900, 13
 
         query_points = init_det_points_mtv.flatten(1, 2) #(1, 3*900, 13)
-        query_points_2d = init_det_points_mtv.flatten(1, 2) #(1, 900*num_views, 10)
-        query_embeds2d = pos2d_encoder(query_points_2d).reshape(B, V, Q, -1)#(1, num_views, 900, 132)
-        query_embeds = query_embeds2d.flatten(1, 2) #(1, num_views*900, 132)
+        query_embeds = pos2d_encoder(query_points) #(1, 3*900, 256)
 
-        query = torch.zeros_like(query_embeds) #(1, num_views*900, 132)
+        query = torch.zeros_like(query_embeds) #(1, 3*900, 256)
 
         regs = []
         # output from layers' won't update next's layer's ref points
@@ -142,8 +140,8 @@ class TMvdetTransformer(VETransformer):
         '''
 
         L, B, _, C = det_outputs.shape #6, 1, 256
-        # (L, B, V + 1, M, C)
-        det_outputs = det_outputs.reshape(L, B, num_decode_views + 1, -1, C) #(6, 1, 3, 900, 256)
+        # (L, B, V, M, C)
+        det_outputs = det_outputs.reshape(L, B, num_decode_views, -1, C) #(6, 1, 3, 900, 256)
         # (L, B, V + 1, M, 10)
         #regs = torch.stack(regs).reshape(L, B, num_decode_views + 1, init_det_points.shape[-2], -1)
 

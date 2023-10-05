@@ -23,4 +23,10 @@ tools/dist_test.sh projects/configs/vedet_messytable.py work_dirs/vedet_messytab
 #VEdet Messytable test(single gpu)
 python tools/test.py projects/configs/vedet_messytable.py work_dirs/vedet_messytable/latest.pth --eval bbox
 
+#########################################################################
+# Messytable Reid
 
+#VEdet Messytable train
+python tools/train.py projects/configs/tmvreid_messytable_rpn.py --work-dir work_dirs/tmvreid_messytable_rpn
+
+CUDA_VISIBLE_DEVICES=1,2,3 tools/dist_train.sh projects/configs/tmvreid_messytable_rpn.py 3 --work-dir work_dirs/tmvreid_messytable_rpn/

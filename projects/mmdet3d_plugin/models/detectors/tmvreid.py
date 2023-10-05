@@ -24,7 +24,7 @@ from .vedet import VEDet
 
 @DETECTORS.register_module()
 class TMVReid(VEDet):
-    def forward_train(self, img_metas=None, gt_bboxes_3d=None, gt_labels_3d=None, maps=None, img=None, rpn_x1y1x2y2=None, rpn_emb=None, rpn_prob=None):
+    def forward_train(self, img_metas=None, gt_bboxes_3d=None, gt_labels_3d=None, maps=None, img=None, rpn_cxcywh=None, rpn_emb=None, rpn_prob=None):
         """Forward training function.
         Args:
             points (list[torch.Tensor], optional): Points of each sample.
@@ -49,7 +49,7 @@ class TMVReid(VEDet):
             dict: Losses of different branches.
         """
 
-        inputs = (rpn_x1y1x2y2, rpn_emb, rpn_prob)
+        inputs = (rpn_cxcywh, rpn_emb, rpn_prob)
 
         img_metas[0]['img'] = img
         losses = dict()
@@ -57,9 +57,9 @@ class TMVReid(VEDet):
         losses.update(losses_pts)
         return losses
 
-    def simple_test(self, img_metas, img=None, gt_map=None, rescale=False, rpn_x1y1x2y2=None, rpn_emb=None, rpn_prob=None):
+    def simple_test(self, img_metas, img=None, gt_map=None, rescale=False, rpn_cxcywh=None, rpn_emb=None, rpn_prob=None):
         """Test function without augmentaiton."""
-        inputs = (rpn_x1y1x2y2, rpn_emb, rpn_prob)
+        inputs = (rpn_cxcywh, rpn_emb, rpn_prob)
 
         results_list = [dict() for i in range(len(img_metas))]
         results = self.simple_test_pts(inputs, img_metas, gt_map, rescale=rescale)

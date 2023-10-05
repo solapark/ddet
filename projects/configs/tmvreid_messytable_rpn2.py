@@ -7,7 +7,7 @@ plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
 log_config = dict(
-    interval=10,
+    interval=50,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
@@ -65,22 +65,25 @@ model = dict(
     #type='VEDet',
     type='TMVReid',
     use_grid_mask=True,
-    img_backbone=dict(
-        type='VoVNetCP',
-        spec_name='V-99-eSE',
-        norm_eval=True,
-        frozen_stages=-1,
-        input_ch=3,
-        out_features=(
-            'stage4',
-            'stage5',
-        )),
-    img_neck=dict(type='CPFPN', in_channels=[768, 1024], out_channels=256, num_outs=2),
+    #img_backbone=dict(
+    #    type='VoVNetCP',
+    #    spec_name='V-99-eSE',
+    #    norm_eval=True,
+    #    frozen_stages=-1,
+    #    input_ch=3,
+    #    out_features=(
+    #        'stage4',
+    #        'stage5',
+    #    )),
+    #img_neck=dict(type='CPFPN', in_channels=[768, 1024], out_channels=256, num_outs=2),
     gt_depth_sup=False,  # use cache to supervise
     pts_bbox_head=dict(
         type='TMVReidHead',
         emb_intrinsics=True,
         pred_size=pred_size,
+        num_input=300,
+        input_emb_size=128,
+        idx_emb_size=127,
         num_classes=num_classes,
         in_channels=256,
         num_query=900,
@@ -91,6 +94,7 @@ model = dict(
         reg_channels=10,
         num_decode_views=num_views,
         with_time=False,
+        rpn_idx_learnable=False,
         det_transformer=dict(
             #type='VETransformer',
             type='TMvReidTransformer',
@@ -119,24 +123,26 @@ model = dict(
             num_classes=num_classes),
         input_ray_encoding=dict(
             type='FourierMLPEncoding',
-            input_channels=14,
-            hidden_dims=[int(1.5 * 14 * 2 * bands)],
+            input_channels=15,
+            hidden_dims=[int(1.5 * 15 * 2 * bands)],
             embed_dim=256,
             fourier_type='linear',
-            fourier_channels=14 * 2 * bands,
+            fourier_channels=15 * 2 * bands,
             max_frequency=max_freq),
         output_det_encoding=dict(
             type='FourierMLPEncoding',
-            input_channels=14,
-            hidden_dims=[int(1.5 * 14 * 2 * bands)],
+            input_channels=13,
+            hidden_dims=[int(1.5 * 13 * 2 * bands)],
             embed_dim=256,
             fourier_type='linear',
-            fourier_channels=14 * 2 * bands,
+            fourier_channels=13 * 2 * bands,
             max_frequency=max_freq),
         loss_cls=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         loss_visible=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         loss_bbox=dict(type='L1Loss', loss_weight=.25/10),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0),
+        loss_reid=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
+        loss_idx=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
     ),
     # model training and testing settings
     train_cfg=dict(
@@ -156,7 +162,7 @@ model = dict(
 
 dataset_type = 'CustomMessytableRpnDataset'
 #data_root = 'data/nuscenes/'
-data_root = 'data/Messytable/rpn'
+data_root = 'data/Messytable/rpn/'
 
 #file_client_args = dict(backend='disk')
 #ida_aug_conf = {
@@ -179,14 +185,14 @@ data_root = 'data/Messytable/rpn'
 meta_keys = ('filename', 'ori_shape', 'img_shape', 'lidar2img', 'depth2img', 'cam2img', 'pad_shape', 'scale_factor',
              'flip', 'pcd_horizontal_flip', 'pcd_vertical_flip', 'img_norm_cfg',
              'pcd_trans', 'sample_idx', 'pcd_scale_factor', 'pcd_rotation', 'pts_filename', 'transformation_3d_flow',
-             'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp')
+             'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp', 'rpn_x1y1x2y2')
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
     dict(type='LoadMultiViewRpnFromFiles'),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='LoadMultiviewTargets', num_views=num_views, rpn_mode=True),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
-    dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'rpn_x1y1x2y2', 'rpn_emb', 'rpn_prob'], meta_keys=meta_keys)
+    dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'rpn_cxcywh', 'rpn_emb', 'rpn_prob'], meta_keys=meta_keys)
 ]
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
@@ -200,7 +206,7 @@ test_pipeline = [
         flip=False,
         transforms=[
             dict(type='DefaultFormatBundle3D', class_names=class_names),
-            dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'rpn_x1y1x2y2', 'rpn_emb', 'rpn_prob'], meta_keys=meta_keys)
+            dict(type='Collect3D', keys=['gt_bboxes_3d', 'gt_labels_3d', 'img', 'rpn_cxcywh', 'rpn_emb', 'rpn_prob'], meta_keys=meta_keys)
         ])
 
 ]
@@ -208,8 +214,8 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=1,
-    workers_per_gpu=4,
-    #workers_per_gpu=0,
+    #workers_per_gpu=4,
+    workers_per_gpu=0,
     train=dict(
         type=dataset_type,
         data_root=data_root,
@@ -222,7 +228,6 @@ data = dict(
         #modality=input_modality,
         test_mode=False,
         use_valid_flag=True,
-        #num_load=1
         # we use box_type_3d='LiDAR' in kitti and nuscenes dataset
         # and box_type_3d='Depth' in sunrgbd and scannet dataset.
         #box_type_3d='LiDAR'
@@ -231,7 +236,8 @@ data = dict(
         type=dataset_type,
         pipeline=test_pipeline,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_val.pkl',
-        ann_file=data_root + 'messytable_infos_val.pkl',
+        #ann_file=data_root + 'messytable_infos_val.pkl',
+        ann_file=data_root + 'messytable_infos_train.pkl',
         #ann_file=data_root + 'messytable_infos_debug.pkl',
         classes=class_names,
         num_views=num_views,
@@ -242,7 +248,8 @@ data = dict(
         type=dataset_type,
         pipeline=test_pipeline,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_val.pkl',
-        ann_file=data_root + 'messytable_infos_test.pkl',
+        #ann_file=data_root + 'messytable_infos_test.pkl',
+        ann_file=data_root + 'messytable_infos_train.pkl',
         #ann_file=data_root + 'messytable_infos_debug.pkl',
         classes=class_names,
         num_views=num_views,
@@ -266,14 +273,14 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 200
-save_dir = '/data3/sap/VEDet/result/messytable12'
-evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
+save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/2'
+evaluation = dict(interval=300, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
 #evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True, out_dir='/data3/sap/VEDet/result')
 #checkpoint_config = dict(interval=24)
-checkpoint_config = dict(interval=1)
+checkpoint_config = dict(interval=10)
 find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
+#load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
 #load_from = 'work_dirs/vedet_messytable2/epoch_24.pth'
 resume_from = None

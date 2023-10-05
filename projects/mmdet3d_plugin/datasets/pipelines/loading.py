@@ -4,11 +4,14 @@
 # Copyright (c) 2022 megvii-model. All Rights Reserved.
 # ------------------------------------------------------------------------
 import math
+import pickle
 
 import mmcv
 import numpy as np
 from mmdet.datasets.builder import PIPELINES
 from einops import rearrange
+
+from ...core.bbox.util import x1y1x2y22cxcywh
 
 
 @PIPELINES.register_module()
@@ -181,15 +184,13 @@ class LoadMultiViewRpnFromFiles(object):
         pass 
 
     def __call__(self, results):
-        filename = results['pickle_path']
-        with open(filename, 'rb') as f:
-            pred_box, pred_box_emb, pred_box_prob, img_size = pickle.load(f) 
-        strideW, strideH = img_size
-        pred_box[..., [0,2]] *= strideW
-        pred_box[..., [1,3]] *= strideH
+        pickle_path = results['pickle_path']
+        with open(pickle_path, 'rb') as f:
+            pred_box, pred_box_emb, pred_box_prob = pickle.load(f) 
 
         results['pickle_path'] = pickle_path
-        results['rpn_x1y1x2y2'] = pred_box #(300,3,4) x1y1x2y2
+        results['rpn_x1y1x2y2'] = pred_box.astype(np.float32) #(300,3,4) x1y1x2y2
+        results['rpn_cxcywh'] = x1y1x2y22cxcywh(results['rpn_x1y1x2y2']) #(300,3,4) cxcywh
         results['rpn_emb'] = pred_box_emb.astype(np.float32) #(300,3,128)
         results['rpn_prob'] = pred_box_prob #(300,3)
         return results

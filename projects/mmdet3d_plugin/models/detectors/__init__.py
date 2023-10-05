@@ -9,5 +9,6 @@
 # ------------------------------------------------------------------------
 from .vedet import VEDet
 from .tmvdet import TMVDet
+from .tmvreid import TMVReid
 
-__all__ = ['VEDet', 'TMVDet']
+__all__ = ['VEDet', 'TMVDet', 'TMVReid']

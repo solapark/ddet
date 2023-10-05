@@ -9,9 +9,10 @@
 from .petr_transformer import PETRTransformer, PETRMultiheadAttention, PETRTransformerEncoder, PETRTransformerDecoder
 from .vedet_transformer import VETransformer
 from .tmvdet_transformer import TMvdetTransformer
+from .tmvreid_transformer import TMvReidTransformer
 from .positional_encoding import FourierMLPEncoding
 
 __all__ = [
-    'PETRTransformer', 'PETRMultiheadAttention', 'PETRTransformerEncoder', 'PETRTransformerDecoder', 'VETransformer', 'TMvdetTransformer',
+    'PETRTransformer', 'PETRMultiheadAttention', 'PETRTransformerEncoder', 'PETRTransformerDecoder', 'VETransformer', 'TMvdetTransformer', 'TMvReidTransformer',
     'FourierMLPEncoding'
 ]

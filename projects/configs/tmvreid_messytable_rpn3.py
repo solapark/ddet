@@ -79,6 +79,7 @@ model = dict(
     gt_depth_sup=False,  # use cache to supervise
     pts_bbox_head=dict(
         type='TMVReidHead',
+        tp_train_only=True,
         emb_intrinsics=True,
         pred_size=pred_size,
         num_input=300,
@@ -273,7 +274,7 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 200
-save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/1'
+save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/3'
 evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
 #evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True, out_dir='/data3/sap/VEDet/result')
 #checkpoint_config = dict(interval=24)

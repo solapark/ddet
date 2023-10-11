@@ -26,7 +26,7 @@ except ImportError:
 
 
 @BBOX_ASSIGNERS.register_module()
-class HungarianAssignerMtvReid2D(BaseAssigner):
+class QueryGtAssignerMtvReid2D(BaseAssigner):
     """Computes one-to-one matching between predictions and ground truth.
     This class computes an assignment between the targets and the predictions
     based on the costs. The costs are weighted sum of three components:
@@ -58,8 +58,8 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
                  iou_cost=dict(type='IoUCost', weight=0.0),
                  query_cost=dict(type='QueryCost', weight=1.0),
                  align_with_loss=False,
-                 pc_range=None, 
-                 rep=1):
+                 pc_range=None,
+                 thresh=.1):
         self.cls_cost = build_match_cost(cls_cost)
         self.visible_cost = build_match_cost(visible_cost)
         self.reg_cost = build_match_cost(reg_cost)
@@ -67,7 +67,7 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
         self.query_cost = build_match_cost(query_cost)
         self.align_with_loss = align_with_loss
         self.pc_range = pc_range
-        self.rep = rep
+        self.thresh = thresh
 
     def assign(self, norm_pred_cxcy, cls_pred, visible_pred, reid_pred, idx_pred, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore=None, eps=1e-7, img_shape=None):
         """Computes one-to-one matching based on the weighted costs.
@@ -132,30 +132,28 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
         #query cost
         H, W = img_shape
         if self.query_cost.weight > 0 :
-            normalized_gt_cxcy = deepcopy(gt_proj_cxcy) #(num_inst, num_cam, 2) projected cxcy by DLT
+            normalized_gt_cxcy = deepcopy(gt_proj_cxcy) #(num_gt, num_cam, 2) projected cxcy by DLT
             normalized_gt_cxcy[..., 0] /= W
             normalized_gt_cxcy[..., 1] /= H
-            normalized_gt_cxcy = torch.nan_to_num(normalized_gt_cxcy).flatten(1,2) #(num_inst, num_cam*2)
-            query_cost = self.query_cost(norm_pred_cxcy, normalized_gt_cxcy, 1-gt_visibles) #(900, num_inst)
+            normalized_gt_cxcy = torch.nan_to_num(normalized_gt_cxcy).flatten(1,2) #(num_gt, num_cam*2)
+            query_cost = self.query_cost(norm_pred_cxcy, normalized_gt_cxcy, 1-gt_visibles) #(900, num_gt)
             cost = cost + query_cost
 
-        # 3. do Hungarian matching on CPU using linear_sum_assignment
-        # assign all indices to backgrounds first
-        cost = cost.detach().cpu()
-        if linear_sum_assignment is None:
-            raise ImportError('Please run "pip install scipy" '
-                              'to install scipy first.')
+        # 3. do matching on CPU using linear_sum_assignment
+        cost = cost.detach().cpu() #(num_det = 900, num_gt)
         cost = torch.nan_to_num(cost, nan=100.0, posinf=100.0, neginf=-100.0)
 
-        assigned_gt_inds[:] = 0
-        for _ in range(self.rep) :
-            matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
-            matched_row_inds = torch.from_numpy(matched_row_inds).to(cls_pred.device)
-            matched_col_inds = torch.from_numpy(matched_col_inds).to(cls_pred.device)
+        min_cost, min_cost_gt_inds = cost.min(-1) #(900,), #(900,)
+        matched_row_inds = torch.where(min_cost < self.thresh) #(num_valid, )
+        matched_col_inds = min_cost_gt_inds[matched_row_inds] #(num_valid)
+        
+        matched_row_inds = matched_row_inds[0].to(cls_pred.device)
+        matched_col_inds = matched_col_inds.to(cls_pred.device)
 
-            # 4. assign backgrounds and foregrounds
-            # assign foregrounds based on matching results
-            assigned_gt_inds[matched_row_inds] = matched_col_inds + 1
-            assigned_labels[matched_row_inds] = gt_labels[matched_col_inds]
-            cost[matched_row_inds, matched_col_inds] = 100.0
+        # 4. assign backgrounds and foregrounds
+        # assign all indices to backgrounds first
+        assigned_gt_inds[:] = 0
+        # assign foregrounds based on matching results
+        assigned_gt_inds[matched_row_inds] = matched_col_inds + 1
+        assigned_labels[matched_row_inds] = gt_labels[matched_col_inds]
         return AssignResult(num_gts, assigned_gt_inds, None, labels=assigned_labels)

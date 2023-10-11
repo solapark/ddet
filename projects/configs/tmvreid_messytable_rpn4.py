@@ -79,6 +79,7 @@ model = dict(
     gt_depth_sup=False,  # use cache to supervise
     pts_bbox_head=dict(
         type='TMVReidHead',
+        debug=True,
         emb_intrinsics=True,
         pred_size=pred_size,
         num_input=300,
@@ -150,12 +151,14 @@ model = dict(
             point_cloud_range=point_cloud_range,
             out_size_factor=4,
             assigner=dict(
-                type='HungarianAssignerMtvReid2D',
+                #type='HungarianAssignerMtvReid2D',
+                type='QueryGtAssignerMtvReid2D',
                 cls_cost=dict(type='FocalLossCost', weight=0),
                 reg_cost=dict(type='BBoxMtv2DL1Cost', weight=0, pred_size=pred_size, num_views=num_views),
                 iou_cost=dict(type='BBoxMtv2DIoUCost', weight=0, pred_size=pred_size, num_views=num_views),  # Fake cost. This is just to make it compatible with DETR head. 
                 query_cost=dict(type='QueryCost', weight=1, num_views=num_views),  
                 align_with_loss=True,
+                thresh=1.,
                 pc_range=point_cloud_range))))
 
 dataset_type = 'CustomMessytableRpnDataset'
@@ -273,7 +276,7 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 200
-save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/1'
+save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/4'
 evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
 #evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True, out_dir='/data3/sap/VEDet/result')
 #checkpoint_config = dict(interval=24)
@@ -282,5 +285,5 @@ find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 #load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
-#load_from = 'work_dirs/vedet_messytable2/epoch_24.pth'
+load_from = 'work_dirs/tmvreid_messytable_rpn4/epoch_150.pth'
 resume_from = None

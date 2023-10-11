@@ -13,7 +13,7 @@ import torch
 
 from mmdet.core.bbox import BaseBBoxCoder
 from mmdet.core.bbox.builder import BBOX_CODERS
-from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox
+from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox, get_box_form_pred_idx
 import torch.nn.functional as F
 
 @BBOX_CODERS.register_module()
@@ -328,3 +328,118 @@ class NMSFreeClsCoder(BaseBBoxCoder):
         for i in range(batch_size):
             predictions_list.append(self.decode_single(all_cls_scores[i], all_bbox_preds[i]))
         return predictions_list
+
+@BBOX_CODERS.register_module()
+class TMVReidNMSFreeCoder(BaseBBoxCoder):
+    """Bbox coder for NMS-free detector.
+    Args:
+        pc_range (list[float]): Range of point cloud.
+        post_center_range (list[float]): Limit of the center.
+            Default: None.
+        max_num (int): Max number to be kept. Default: 100.
+        score_threshold (float): Threshold to filter boxes based on score.
+            Default: None.
+        code_size (int): Code size of bboxes. Default: 9
+    """
+
+    def __init__(self,
+                 max_num=300,
+                 num_classes=120,
+                 num_views=3,
+                 reid_score_threshold=None,
+                 cls_score_threshold=None,
+                ):
+        self.max_num = max_num
+        self.num_views = num_views
+        self.reid_score_threshold = reid_score_threshold
+        self.cls_score_threshold = cls_score_threshold
+        self.num_classes = num_classes
+        pass
+
+    def encode(self):
+        pass
+
+    def decode_single(self, cls_scores, reid_scores, visible_scores, bbox_preds):
+        """Decode bboxes.
+        Args:
+            cls_scores (Tensor): Outputs from the classification head, \
+                shape [num_query, cls_out_channels]. Note \
+                cls_out_channels should includes background.
+            bbox_preds (Tensor): Outputs from the regression \
+                head with normalized coordinate format (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy). \
+                Shape [num_query, 9].
+        Returns:
+            list[dict]: Decoded boxes.
+        """
+        max_num = self.max_num
+
+        reid_scores, indexs = reid_scores.sigmoid().topk(max_num) #(300,), #(300,)
+
+        soft_cls_scores, labels = F.softmax(cls_scores, dim=-1).max(-1) #(900,), #(900,)
+        #soft_cls_scores, indexs = soft_cls_scores.view(-1).topk(max_num) #(300,), #(300,)
+
+        labels = labels[indexs]
+        cls_scores_sig = cls_scores.sigmoid()[indexs, labels]
+        bbox_preds = bbox_preds[indexs]
+        visible_scores = visible_scores.sigmoid()[indexs]
+        #reid_scores = reid_scores.sigmoid()[indexs]
+
+        #cls_scores = cls_scores.sigmoid()
+        #cls_scores, indexs = cls_scores.view(-1).topk(max_num)
+        #labels = indexs % self.num_classes
+        #bbox_index = indexs // self.num_classes
+        #bbox_preds = bbox_preds[bbox_index]
+        #visible_scores = visible_scores.sigmoid()[bbox_index]
+        #reid_scores = reid_scores.sigmoid()[bbox_index]
+
+        final_box_preds = bbox_preds
+        final_reid_scores = reid_scores
+        final_cls_scores = cls_scores_sig
+        final_visibles = visible_scores
+        final_preds = labels
+
+        # use score threshold
+        mask = torch.ones_like(final_cls_scores, dtype=torch.bool) #(300, )
+        if self.cls_score_threshold is not None:
+            cls_thresh_mask = final_cls_scores > self.cls_score_threshold
+            mask &= cls_thresh_mask
+
+        if self.reid_score_threshold is not None:
+            reid_thresh_mask = final_reid_scores > self.reid_score_threshold
+            mask &= reid_thresh_mask
+
+        boxes3d = final_box_preds[mask]
+        reid_scores = final_reid_scores[mask]
+        cls_scores = final_cls_scores[mask]
+        visibles = final_visibles[mask]
+        labels = final_preds[mask]
+        predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'cls_scores': cls_scores, 'visibles': visibles, 'labels': labels}
+
+        return predictions_dict
+
+    def decode(self, preds_dicts, pred_box):
+        """Decode bboxes.
+        Args:
+            all_cls_scores (Tensor): Outputs from the classification head, \
+                shape [nb_dec, bs, num_query, cls_out_channels]. Note \
+                cls_out_channels should includes background.
+            all_bbox_preds (Tensor): Sigmoid outputs from the regression \
+                head with normalized coordinate format (cx, cy, w, l, cz, h, rot_sine, rot_cosine, vx, vy). \
+                Shape [nb_dec, bs, num_query, 9].
+        Returns:
+            list[dict]: Decoded boxes.
+        """
+        all_cls_scores = preds_dicts['all_cls_scores'][-1]
+        all_reid_scores = preds_dicts['all_reid_scores'][-1]
+        all_visible_scores = preds_dicts['all_visible_scores'][-1]
+        all_idx_scores = preds_dicts['all_idx_scores'][-1]
+
+        batch_size = all_cls_scores.size()[0]
+        predictions_list = []
+        for i in range(batch_size):
+            pred_idx_scores, pred_idx = F.softmax(all_idx_scores[i], dim=-1).max(-1) #(900, 3), (900, 3)
+            bbox_preds = get_box_form_pred_idx(pred_box, pred_idx, self.num_views) #(900, 3, 4)
+            predictions_list.append(self.decode_single(all_cls_scores[i], all_reid_scores[i], all_visible_scores[i], bbox_preds))
+        return predictions_list
+
+

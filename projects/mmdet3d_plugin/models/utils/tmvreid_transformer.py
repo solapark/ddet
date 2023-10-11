@@ -115,13 +115,13 @@ class TMvReidTransformer(VETransformer):
         regs = []
         # output from layers' won't update next's layer's ref points
         det_outputs = self.det_decoders(
-            query=query.transpose(0, 1),
-            key=memory,
-            value=memory,
-            key_pos=key_pos,
-            query_pos=query_embeds.transpose(0, 1),
-            key_padding_mask=mask,
-            attn_masks=attn_masks,
+            query=query.transpose(0, 1), #(1, 3*900, 256)
+            key=memory, #(3*300*1, 1, 256)
+            value=memory, #(3*300*1, 1, 256)
+            key_pos=key_pos, #(3*300*1, 1, 256)
+            query_pos=query_embeds.transpose(0, 1), #(3*900, 1, 256)
+            key_padding_mask=mask, #(1, 3*300*1)
+            attn_masks=attn_masks,  #[(2700, 2700), None]
             reg_branch=reg_branch)
         det_outputs = det_outputs.transpose(1, 2) #(6, 1, 2700, 256)
         det_outputs = torch.nan_to_num(det_outputs) #(6, 1, 2700, 256)

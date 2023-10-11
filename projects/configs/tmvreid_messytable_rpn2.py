@@ -7,7 +7,7 @@ plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
 log_config = dict(
-    interval=50,
+    interval=100,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
@@ -214,8 +214,8 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=1,
-    #workers_per_gpu=4,
-    workers_per_gpu=0,
+    workers_per_gpu=4,
+    #workers_per_gpu=0,
     train=dict(
         type=dataset_type,
         data_root=data_root,

@@ -14,7 +14,8 @@ def show_result_mtv2d(data_root,
                 show_pred=True,
                 draw_inst_by_inst=True,
                 tail='',
-                wait_time=0):
+                wait_time=0,
+                visible_thresh=.5):
     """Convert results into format that is directly readable for meshlab.
 
     Args:
@@ -28,7 +29,9 @@ def show_result_mtv2d(data_root,
     """
     scene_id, gt_bboxes, gt_is_valids, gt_cls, det_bboxes, det_is_valids, det_cls, det_score = result
 
-    
+    if (det_score > eval_thresh).sum() == 0: 
+        return 
+
     img_list = []
     for i, (cam_gt_bboxes, cam_gt_is_valids, cam_det_bboxes, cam_det_is_valids) in enumerate(zip(gt_bboxes, gt_is_valids, det_bboxes, det_is_valids)) : 
         img_path = osp.join(data_root, '%s-%02d.jpg'%(scene_id, i+1))
@@ -38,13 +41,14 @@ def show_result_mtv2d(data_root,
         cam_gt_bboxes = cam_gt_bboxes[cam_gt_is_valids] #(num_gt, 4) #(cx cy w h)
         cam_gt_cls = gt_cls[cam_gt_is_valids] #(num_gt, ) #str
 
-        cam_det_is_valids =  (cam_det_is_valids>.5) & (det_score > eval_thresh) #(num_pred, )
+        cam_det_is_valids =  (cam_det_is_valids>visible_thresh) & (det_score > eval_thresh) #(num_pred, )
         cam_det_bboxes = cam_det_bboxes[cam_det_is_valids] #(num_pred, 4) #(cx cy w h)
         cam_det_cls = det_cls[cam_det_is_valids] #(num_pred,) #str 
         cam_det_score = det_score[cam_det_is_valids] #(num_pred,) #float
 
         img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, show_gt, show_pred)
         img_list.append(img)
+
     img = np.concatenate(img_list, axis=0)
 
     result_path = osp.join(out_dir, '%s%s.jpg'%(scene_id, tail))
@@ -53,17 +57,19 @@ def show_result_mtv2d(data_root,
     if draw_inst_by_inst :
         if show_pred :
             for i in range(len(det_cls)) :
-                show_gt=False
                 tail = '_%02d'%(i)
-                result = scene_id, gt_bboxes, gt_is_valids, gt_cls, det_bboxes[:, i:i+1], det_is_valids[:, i:i+1], det_cls[i:i+1], det_score[i:i+1] 
-                show_result_mtv2d(data_root, out_dir, result, eval_thresh, show=show, show_gt=show_gt, show_pred=show_pred, draw_inst_by_inst=False, tail=tail, wait_time=wait_time)
+                #show_gt=False
+                #result = scene_id, gt_bboxes, gt_is_valids, gt_cls, det_bboxes[:, i:i+1], det_is_valids[:, i:i+1], det_cls[i:i+1], det_score[i:i+1] 
+                show_gt=True
+                result = scene_id, gt_bboxes[:, i:i+1], gt_is_valids[:, i:i+1], gt_cls[i:i+1], det_bboxes[:, i:i+1], det_is_valids[:, i:i+1], det_cls[i:i+1], det_score[i:i+1] 
+                show_result_mtv2d(data_root, out_dir, result, eval_thresh, show=show, show_gt=show_gt, show_pred=show_pred, draw_inst_by_inst=False, tail=tail, wait_time=wait_time, visible_thresh=visible_thresh)
 
         else :
             for i in range(len(gt_cls)) :
                 show_gt=True
                 tail = '_%02d'%(i)
                 result = scene_id, gt_bboxes[:, i:i+1], gt_is_valids[:, i:i+1], gt_cls[i:i+1], det_bboxes, det_is_valids, det_cls, det_score
-                show_result_mtv2d(data_root, out_dir, result, eval_thresh, show=show, show_gt=show_gt, show_pred=show_pred, draw_inst_by_inst=False, tail=tail, wait_time=wait_time)
+                show_result_mtv2d(data_root, out_dir, result, eval_thresh, show=show, show_gt=show_gt, show_pred=show_pred, draw_inst_by_inst=False, tail=tail, wait_time=wait_time, visible_thresh=visible_thresh)
    
 def imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, show_gt=True, show_pred=True):
     # Make a copy of the image to draw bounding boxes on

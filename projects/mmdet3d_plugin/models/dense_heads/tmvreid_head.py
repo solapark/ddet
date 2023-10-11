@@ -60,6 +60,8 @@ class TMVReidHead(TMVDetHead):
 
     def __init__(self,
                  in_channels,
+                 tp_train_only=False,
+                 rpn_mask=False,
                  debug=False,
                  pred_size=10,
                  num_input=300,
@@ -67,6 +69,7 @@ class TMVReidHead(TMVDetHead):
                  idx_emb_size=127,
                  num_classes=10,
                  num_query=900,
+                 position_range=None,
                  det_transformer=None,
                  det_feat_idx=0,
                  sync_cls_avg_factor=False,
@@ -109,6 +112,9 @@ class TMVReidHead(TMVDetHead):
         # since it brings inconvenience when the initialization of
         # `AnchorFreeHead` is called.
         self.debug = debug
+        self.tp_train_only = tp_train_only
+        self.rpn_mask = rpn_mask
+
         if 'code_size' in kwargs:
             self.code_size = kwargs['code_size']
         else:
@@ -201,13 +207,14 @@ class TMVReidHead(TMVDetHead):
 
         self.code_weights = nn.Parameter(torch.tensor(self.code_weights, requires_grad=False), requires_grad=False)
         self.bbox_coder = build_bbox_coder(bbox_coder) if bbox_coder else None
-        self.pc_range = self.bbox_coder.pc_range
+        self.pc_range = position_range
 
         if rpn_idx_learnable :
             self.idx_emb = nn.Parameter(torch.rand((num_input, 1, idx_emb_size))) #(300, 1, 127)
             self.register_parameter('idx_emb', self.idx_emb)
         else :
-            self.idx_emb = torch.arange(0, 1.0, 1/num_input).repeat(idx_emb_size, 1, 1).transpose(2,0) #(300, 1, 127)
+            idx_emb = torch.arange(0, 1.0, 1/num_input).repeat(idx_emb_size, 1, 1).transpose(2,0) #(300, 1, 127)
+            self.idx_emb = nn.Parameter(torch.tensor(idx_emb, requires_grad=False), requires_grad=False)
 
         self.embed_dims = 256
         self.det_transformer = build_transformer(det_transformer) if det_transformer is not None else None
@@ -348,10 +355,18 @@ class TMVReidHead(TMVDetHead):
         pred_prob = pred_prob.transpose(2, 1).unsqueeze(-1).unsqueeze(-1) # (1, 3, 300, 1, 1), 
         batch_size, num_cams, feat_h, feat_w, _ = pred_feats.shape #1, 3, 300, 1
         masks = pred_feats.new_zeros((batch_size, num_cams, feat_h, feat_w)).to(torch.bool) #(1, 3, 300, 1)
+        if self.rpn_mask and not is_test:
+            masks[:] = True
+            target_idx = pred_box.new_tensor(self.img_metas[0]['pred_box_idx']).to(torch.long) #(num_target, 3)
+            num_target = len(target_idx) #num_target
+            cam_idx = torch.arange(self.num_decode_views).repeat(num_target, 1).flatten(0,1) #(3, )->(num_target, 3)->(num_target*3, )
+            target_idx = target_idx.flatten(0,1) #(num_target*3, )
+            masks[:, cam_idx[target_idx>-1], target_idx[target_idx>-1]] = False
 
         if self.input_ray_encoding is not None:
             pos_embeds = self.position_embedding(pred_box, img_metas) #(1, 3, 300, 1, 256)
         rpn_idx_emb = self.idx_emb.repeat(batch_size, num_cams, 1, 1, 1) #(1, 3, 300, 1, 3)
+        #pred_prob[:] = 1.0
         feats = torch.cat([pred_feats, pred_prob, rpn_idx_emb], dim=-1)  #(1, 3, 300, 1, 128+1+127)
         feats = feats.flatten(2, 3) #(1, 3, 300*1, 256)
 
@@ -482,6 +497,9 @@ class TMVReidHead(TMVDetHead):
         labels = gt_bboxes.new_full((num_bboxes, ), self.num_classes, dtype=torch.long) #(900, )
         labels[pos_inds] = gt_labels[sampling_result.pos_assigned_gt_inds] 
         label_weights = gt_bboxes.new_ones(num_bboxes) #(900, )
+        if self.tp_train_only : 
+            label_weights[:] = 0.
+            label_weights[pos_inds] = 1.0
 
         # visible targets
         visible_targets = torch.ones_like(visible_score, dtype=torch.long) #(900, 3=num_views) #0=fg, 1=bg
@@ -493,6 +511,9 @@ class TMVReidHead(TMVDetHead):
         reid_targets = torch.ones_like(reid_score, dtype=torch.long) #(900, ) #0=fg, 1=bg
         reid_targets[pos_inds] = 0
         reid_weights = reid_score.new_ones(num_bboxes) #(900, )
+        if self.tp_train_only : 
+            reid_weights[:] = 0.
+            reid_weights[pos_inds] = 1.0
 
         # idx targets
         idx_targets = gt_idx.new_full(visible_score.shape, self.num_input, dtype=torch.long) #(900, 3) = 300
@@ -666,13 +687,14 @@ class TMVReidHead(TMVDetHead):
             '''
 
             if self.debug :
+                #self.debug = 0
                 import torch.nn.functional as F
                 from ...core.bbox.util import denormalize_bbox
                 from ...core.visualization.show_result_mtv2d import  imshow_gt_det_bboxes, show_result_mtv2d
                 import os
                 import mmcv
 
-                save_dir = '/data3/sap/VEDet/result/tmvreid1'
+                save_dir = '/data3/sap/VEDet/result/tmvreid4'
 
                 data_root = '/'+os.path.join(*self.img_metas[0]['filename'][0].split('/')[:-1])
                 filename = self.img_metas[0]['filename'][0].split('/')[-1].split('.')[0].split('-')[:-1]
@@ -703,15 +725,18 @@ class TMVReidHead(TMVDetHead):
                     return cam_det_bboxes.transpose(1, 0).cpu().detach().numpy(), cam_is_valids.transpose(1, 0).cpu().detach().numpy(), cam_reid_scores.cpu().detach().numpy(), cam_det_cls, cam_det_scores.cpu().detach().numpy() 
 
                 is_draw_gt_target = True
+                #is_draw_gt_target = 0
                 if is_draw_gt_target : 
                     draw_idx = target_idx
                     save_name = 'gt_target' 
                     cur_save_dir = os.path.join(save_dir, save_name)
                     cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores = result_from_idx(draw_idx)
+                    #cam_is_valids[:] = 1
                     result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores)
                     show_result_mtv2d(data_root, cur_save_dir, result, 0) 
 
-                is_draw_pred = True
+                #is_draw_pred = True
+                is_draw_pred = 0
                 if is_draw_pred :
                     draw_thresh = .1
                     draw_idx = torch.where(reid_scores.sigmoid()>draw_thresh)[0] #(num_pred, )
@@ -729,7 +754,8 @@ class TMVReidHead(TMVDetHead):
                     result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores)
                     show_result_mtv2d(data_root, cur_save_dir, result, 0) 
 
-                is_draw_gt = True
+                #is_draw_gt = True
+                is_draw_gt = 0
                 if is_draw_gt : 
                     draw_idx = target_idx
                     save_name = 'gt' 
@@ -958,6 +984,7 @@ class TMVReidHead(TMVDetHead):
         Returns:
             dict[str, Tensor]: A dictionary of loss components.
         """
+        #self.debug=True
         loss_dict = dict()
         if self.loss_cls is not None:
             assert gt_bboxes_ignore is None, \
@@ -1011,7 +1038,10 @@ class TMVReidHead(TMVDetHead):
             else:
                 all_seg_preds = [None] * num_dec_layers
 
-            losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg = multi_apply(self.loss_single, all_cls_scores, all_visible_scores, all_reid_scores, all_idx_scores, all_bbox_preds, all_seg_preds, all_gt_bboxes_list, all_gt_labels_list, all_gt_visibles_list, all_gt_idx_list, all_gt_proj_cxcy_list, all_gt_seg_list, all_gt_bboxes_ignore_list)
+            if self.debug : 
+                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg = multi_apply(self.loss_single, all_cls_scores[-1:], all_visible_scores[-1:], all_reid_scores[-1:], all_idx_scores[-1:], all_bbox_preds[-1:], all_seg_preds[-1:], all_gt_bboxes_list[-1:], all_gt_labels_list[-1:], all_gt_visibles_list[-1:], all_gt_idx_list[-1:], all_gt_proj_cxcy_list[-1:], all_gt_seg_list[-1:], all_gt_bboxes_ignore_list[-1:])
+            else : 
+                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg = multi_apply(self.loss_single, all_cls_scores, all_visible_scores, all_reid_scores, all_idx_scores, all_bbox_preds, all_seg_preds, all_gt_bboxes_list, all_gt_labels_list, all_gt_visibles_list, all_gt_idx_list, all_gt_proj_cxcy_list, all_gt_seg_list, all_gt_bboxes_ignore_list)
 
             # loss of proposal generated from encode feature map.
             if enc_cls_scores is not None:
@@ -1258,5 +1288,29 @@ class TMVReidHead(TMVDetHead):
         camera_embedding = self.input_ray_encoding(geometry) #(1, 3, 300, 1, 256)
 
         return camera_embedding
+
+    @force_fp32(apply_to=('preds_dicts'))
+    def get_bboxes(self, preds_dicts, img_metas):
+        """Generate bboxes from bbox head predictions.
+        Args:
+            preds_dicts (tuple[list[dict]]): Prediction results.
+            img_metas (list[dict]): Point cloud and image's meta info.
+        Returns:
+            list[dict]: Decoded bbox, scores and labels after nms.
+        """
+        #preds_dicts['all_bbox_preds'] = preds_dicts['all_bbox_preds'][..., :10]
+        preds_dicts = self.bbox_coder.decode(preds_dicts, self.pred_box[0])
+        num_samples = len(preds_dicts)
+
+        ret_list = []
+        for i in range(num_samples):
+            preds = preds_dicts[i]
+            bboxes = preds['bboxes']
+            visibles = preds['visibles']
+            reid_scores = preds['reid_scores']
+            cls_scores = preds['cls_scores']
+            labels = preds['labels']
+            ret_list.append([bboxes, visibles, reid_scores, cls_scores, labels])
+        return ret_list
 
 

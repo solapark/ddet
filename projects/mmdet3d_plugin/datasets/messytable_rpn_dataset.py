@@ -89,7 +89,7 @@ class CustomMessytableRpnDataset(CustomMessytableDataset):
             cam_instances=info['cam_instances'],
             cam_instances_valid_flags=info['cam_instances_valid_flags'],
             inst_3dp=info['inst_3dp'],  #(num_inst, 3) #cx,cy,cz
-            inst_proj_2dp=info['inst_2dp'], #(num_inst, num_cam, 2) #cx,cy
+            inst_proj_2dp=info['inst_proj_2dp'], #(num_inst, num_cam, 2) #cx,cy
             pred_box_idx=info['pred_box_idx'], #(num_inst, num_cam) #cam1_idx,cam2_idx,cam3_idx
             probs=info['probs'] #(num_inst, num_cam)    
         )
@@ -121,3 +121,76 @@ class CustomMessytableRpnDataset(CustomMessytableDataset):
         input_dict['ann_info'] = annos
 
         return input_dict
+
+
+    def _format_bbox(self, results, jsonfile_prefix=None):
+        """Convert the results to the standard format.
+
+        Args:
+            results (list[dict]): Testing results of the dataset.
+            jsonfile_prefix (str): The prefix of the output jsonfile.
+                You can specify the output directory/filename by
+                modifying the jsonfile_prefix. Default: None.
+
+        Returns:
+            str: Path of the output json file.
+        """
+        messytable_annos = {}
+        mapped_class_names = self.CLASSES
+
+        print('Start to convert detection format...')
+        for sample_id, det in enumerate(mmcv.track_iter_progress(results)):
+            annos = []
+            boxes = output_to_messytable_box(det)
+            scene_id = self.data_infos[sample_id]['scene_id']
+
+            for i, box in enumerate(boxes):
+                messytable_anno = dict(
+                    scene_id=scene_id,
+                    camera_instances=box['boxes'],
+                    camera_instances_valid_flag=box['valid'],
+                    detection_name=mapped_class_names[box['label']],
+                    reid_score=box['reid_score'],
+                    detection_score=box['cls_score'],
+                    )
+                annos.append(messytable_anno)
+            messytable_annos[scene_id] = annos
+
+        messytable_submissions = messytable_annos 
+
+        mmcv.mkdir_or_exist(jsonfile_prefix)
+        res_path = osp.join(jsonfile_prefix, 'results_messytable.json')
+        print('Results writes to', res_path)
+        mmcv.dump(messytable_submissions, res_path)
+        return res_path
+
+def output_to_messytable_box(detection):
+    """Convert the output to the box class in the nuScenes.
+
+    Args:
+        detection (dict): Detection results.
+
+            - boxes_3d (:obj:`BaseInstance3DBoxes`): Detection bbox.
+            - scores_3d (torch.Tensor): Detection scores.
+            - labels_3d (torch.Tensor): Predicted box labels.
+
+    Returns:
+        list[:obj:`NuScenesBox`]: List of standard NuScenesBoxes.
+    """
+    boxmtv2d = detection['boxes_mtv2d'].numpy()
+    visibles = detection['visibles_mtv2d'].numpy()
+    reid_scores = detection['reid_scores_mtv2d'].numpy()
+    cls_scores = detection['cls_scores_mtv2d'].numpy()
+    labels = detection['labels_mtv2d'].numpy()
+
+    box_list = []
+    for i in range(len(boxmtv2d)):
+        box = dict(
+            boxes = boxmtv2d[i],
+            valid = visibles[i],
+            label = labels[i],
+            reid_score = reid_scores[i],
+            cls_score = cls_scores[i],
+            )
+        box_list.append(box)
+    return box_list

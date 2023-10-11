@@ -69,11 +69,13 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                  num_views=None,
                  load_interval=1,
                  num_load=None,
+                 start_idx=0,
                  filter_empty_gt=True,
                  test_mode=False,
                  use_valid_flag=False):
         self.load_interval = load_interval
         self.num_load = num_load
+        self.start_idx = start_idx
         self.use_valid_flag = use_valid_flag
         self.num_views = num_views
         self.timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
@@ -122,9 +124,9 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         #data_infos = list(sorted(data['infos'], key=lambda e: e['timestamp']))
         data_infos = list(data['infos'])
         if self.num_load :
-            data_infos = data_infos[:self.num_load]
+            data_infos = data_infos[self.start_idx:self.start_idx+self.num_load]
         else :
-            data_infos = data_infos[::self.load_interval]
+            data_infos = data_infos[self.start_idx::self.load_interval]
         self.metadata = data['metadata']
         self.version = self.metadata['version']
         return data_infos
@@ -156,10 +158,6 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             gt_names=info['gt_names'],
             cam_instances=info['cam_instances'],
             cam_instances_valid_flags=info['cam_instances_valid_flags'],
-            inst_3dp=info['inst_3dp'], 
-            inst_proj_2dp=info['inst_proj_2dp'], 
-            pred_box_idx=info['pred_box_idx'], 
-            probs=info['probs'], 
         )
 
         image_paths = []
@@ -270,7 +268,9 @@ class CustomMessytableDataset(CustomMtv2DDataset):
 
     def _evaluate_single(self,
                          result_path,
-                         eval_thresh,
+                         cls_thresh,
+                         visible_thresh,
+                         reid_thresh,
                          out_dir,
                          logger=None,
                          metric='bbox',
@@ -296,7 +296,9 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             det_path=result_path,
             gt = self.data_infos,
             output_dir=output_dir,
-            eval_thresh=eval_thresh,)
+            cls_thresh=cls_thresh,
+            visible_thresh=visible_thresh,
+            reid_thresh=reid_thresh,)
             #verbose=False)
         all_ap_dict, cur_map, self.result_list = messytable_eval.main()
         messytable_eval.log_eval()
@@ -357,7 +359,9 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                  show=False,
                  save_dir=None, 
                  show_gt=True,
-                 pipeline=None):
+                 pipeline=None,
+                 visible_thresh=0,
+                 reid_thresh=0):
         """Evaluation in nuScenes protocol.
 
         Args:
@@ -383,12 +387,12 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         if isinstance(result_files, dict):
             for name in result_names:
                 print('Evaluating bboxes of {}'.format(name))
-                self._evaluate_single(result_files[name], eval_thresh, save_dir)
+                self._evaluate_single(result_files[name], eval_thresh, visible_thresh, reid_thresh, save_dir)
         elif isinstance(result_files, str):
-            self._evaluate_single(result_files, eval_thresh, save_dir)
+            self._evaluate_single(result_files, eval_thresh, visible_thresh, reid_thresh, save_dir)
 
         if show:
-            self.show(img_root, save_dir, eval_thresh, pipeline=pipeline, show_gt=show_gt)
+            self.show(img_root, save_dir, eval_thresh, pipeline=pipeline, show_gt=show_gt, visible_thresh=visible_thresh)
 
         if tmp_dir is not None:
             tmp_dir.cleanup()
@@ -417,7 +421,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         ]
         return Compose(pipeline)
 
-    def show(self, data_root, out_dir, eval_thresh, show=True, pipeline=None, wait_time=0, show_gt = True):
+    def show(self, data_root, out_dir, eval_thresh, show=True, pipeline=None, wait_time=0, show_gt = True, visible_thresh=.5):
         """Results visualization.
 
         Args:
@@ -429,7 +433,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         """
         assert out_dir is not None, 'Expect out_dir, got none.'
         for result in self.result_list:
-            show_result_mtv2d(data_root, out_dir, result, eval_thresh=eval_thresh, show=show, wait_time=wait_time, show_gt = show_gt) 
+            show_result_mtv2d(data_root, out_dir, result, eval_thresh=eval_thresh, show=show, wait_time=wait_time, show_gt = show_gt, visible_thresh=visible_thresh) 
 
 def output_to_messytable_box(detection):
     """Convert the output to the box class in the nuScenes.

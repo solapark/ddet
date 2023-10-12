@@ -255,7 +255,7 @@ data = dict(
         classes=class_names,
         num_views=num_views,
         #modality=input_modality,
-        #num_load=10,
+        #num_load=1,
         #start_idx=65
         )
     )
@@ -276,7 +276,7 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 200
-save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/4'
+save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/5'
 evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
 #evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True, out_dir='/data3/sap/VEDet/result')
 #checkpoint_config = dict(interval=24)

@@ -359,7 +359,7 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
     def encode(self):
         pass
 
-    def decode_single(self, cls_scores, reid_scores, visible_scores, bbox_preds):
+    def decode_single(self, cls_scores, reid_scores, visible_scores, bbox_preds, query2ds):
         """Decode bboxes.
         Args:
             cls_scores (Tensor): Outputs from the classification head, \
@@ -383,20 +383,14 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         bbox_preds = bbox_preds[indexs]
         visible_scores = visible_scores.sigmoid()[indexs]
         #reid_scores = reid_scores.sigmoid()[indexs]
-
-        #cls_scores = cls_scores.sigmoid()
-        #cls_scores, indexs = cls_scores.view(-1).topk(max_num)
-        #labels = indexs % self.num_classes
-        #bbox_index = indexs // self.num_classes
-        #bbox_preds = bbox_preds[bbox_index]
-        #visible_scores = visible_scores.sigmoid()[bbox_index]
-        #reid_scores = reid_scores.sigmoid()[bbox_index]
+        query2ds = query2ds[indexs]
 
         final_box_preds = bbox_preds
         final_reid_scores = reid_scores
         final_cls_scores = cls_scores_sig
         final_visibles = visible_scores
         final_preds = labels
+        final_query2ds = query2ds
 
         # use score threshold
         mask = torch.ones_like(final_cls_scores, dtype=torch.bool) #(300, )
@@ -413,7 +407,8 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         cls_scores = final_cls_scores[mask]
         visibles = final_visibles[mask]
         labels = final_preds[mask]
-        predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'cls_scores': cls_scores, 'visibles': visibles, 'labels': labels}
+        query2ds = final_query2ds[mask]
+        predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'cls_scores': cls_scores, 'visibles': visibles, 'labels': labels, 'query2ds': query2ds}
 
         return predictions_dict
 
@@ -433,13 +428,14 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         all_reid_scores = preds_dicts['all_reid_scores'][-1]
         all_visible_scores = preds_dicts['all_visible_scores'][-1]
         all_idx_scores = preds_dicts['all_idx_scores'][-1]
+        all_query2ds = preds_dicts['all_query2ds'][-1]
 
         batch_size = all_cls_scores.size()[0]
         predictions_list = []
         for i in range(batch_size):
             pred_idx_scores, pred_idx = F.softmax(all_idx_scores[i], dim=-1).max(-1) #(900, 3), (900, 3)
             bbox_preds = get_box_form_pred_idx(pred_box, pred_idx, self.num_views) #(900, 3, 4)
-            predictions_list.append(self.decode_single(all_cls_scores[i], all_reid_scores[i], all_visible_scores[i], bbox_preds))
+            predictions_list.append(self.decode_single(all_cls_scores[i], all_reid_scores[i], all_visible_scores[i], bbox_preds, all_query2ds[i]))
         return predictions_list
 
 

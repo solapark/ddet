@@ -7,7 +7,7 @@ plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
 log_config = dict(
-    interval=100,
+    interval=50,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
@@ -79,6 +79,7 @@ model = dict(
     gt_depth_sup=False,  # use cache to supervise
     pts_bbox_head=dict(
         type='TMVReidHead',
+        #debug=True,
         emb_intrinsics=True,
         pred_size=pred_size,
         num_input=300,
@@ -94,7 +95,6 @@ model = dict(
         reg_channels=10,
         num_decode_views=num_views,
         with_time=False,
-        rpn_idx_learnable=False,
         det_transformer=dict(
             #type='VETransformer',
             type='TMvReidTransformer',
@@ -117,9 +117,7 @@ model = dict(
             #type='NMSFreeCoder',
             #type='TMVDetNMSFreeCoder',
             type='TMVReidNMSFreeCoder',
-            #post_center_range=[-61.2, -61.2, -10.0, 61.2, 61.2, 10.0],
-            #pc_range=point_cloud_range,
-            max_num=300,
+            max_num=50,
             num_views=num_views,
             num_classes=num_classes),
         input_ray_encoding=dict(
@@ -154,11 +152,13 @@ model = dict(
             out_size_factor=4,
             assigner=dict(
                 type='HungarianAssignerMtvReid2D',
+                #type='QueryGtAssignerMtvReid2D',
                 cls_cost=dict(type='FocalLossCost', weight=0),
                 reg_cost=dict(type='BBoxMtv2DL1Cost', weight=0, pred_size=pred_size, num_views=num_views),
                 iou_cost=dict(type='BBoxMtv2DIoUCost', weight=0, pred_size=pred_size, num_views=num_views),  # Fake cost. This is just to make it compatible with DETR head. 
                 query_cost=dict(type='QueryCost', weight=1, num_views=num_views),  
                 align_with_loss=True,
+                rep=3,
                 pc_range=point_cloud_range))))
 
 dataset_type = 'CustomMessytableRpnDataset'
@@ -186,7 +186,7 @@ data_root = 'data/Messytable/rpn/'
 meta_keys = ('filename', 'ori_shape', 'img_shape', 'lidar2img', 'depth2img', 'cam2img', 'pad_shape', 'scale_factor',
              'flip', 'pcd_horizontal_flip', 'pcd_vertical_flip', 'img_norm_cfg',
              'pcd_trans', 'sample_idx', 'pcd_scale_factor', 'pcd_rotation', 'pts_filename', 'transformation_3d_flow',
-             'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp', 'rpn_x1y1x2y2')
+             'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp', 'rpn_x1y1x2y2', 'pred_box_idx')
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
     dict(type='LoadMultiViewRpnFromFiles'),
@@ -254,7 +254,9 @@ data = dict(
         #ann_file=data_root + 'messytable_infos_debug.pkl',
         classes=class_names,
         num_views=num_views,
-        #modality=input_modality
+        #modality=input_modality,
+        num_load=10,
+        #start_idx=65
         )
     )
 
@@ -274,15 +276,13 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 200
-save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/2'
-#evaluation = dict(interval=300, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
-#evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True, out_dir='/data3/sap/VEDet/result')
-evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
-#checkpoint_config = dict(interval=24)
+save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn_save_img'
+#evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=True, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
+evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=True, eval_thresh=0, visible_thresh=0, reid_thresh=0, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/', show_query=True)
 checkpoint_config = dict(interval=10)
 find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 #load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
-#load_from = 'work_dirs/vedet_messytable2/epoch_24.pth'
+load_from = 'work_dirs/tmvreid_messytable_rpn4/epoch_150.pth'
 resume_from = None

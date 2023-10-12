@@ -26,7 +26,7 @@ def bboxmtv2result(bboxes, visibles, scores, labels):
 
     return result_dict
 
-def bboxmtvreid2result(bboxes, visibles, reid_scores, cls_scores, labels):
+def bboxmtvreid2result(bboxes, visibles, reid_scores, cls_scores, labels, query2ds):
     """Convert detection results to a list of numpy arrays.
 
     Args:
@@ -49,6 +49,7 @@ def bboxmtvreid2result(bboxes, visibles, reid_scores, cls_scores, labels):
         visibles_mtv2d=visibles.cpu(),
         reid_scores_mtv2d=reid_scores.cpu(),
         cls_scores_mtv2d=cls_scores.cpu(),
-        labels_mtv2d=labels.cpu())
+        labels_mtv2d=labels.cpu(),
+        query2ds_mtv2d=query2ds.cpu())
 
     return result_dict

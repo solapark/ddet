@@ -588,8 +588,9 @@ class DataLoader:
         return data 
 
 class MessytableEval:
-    def __init__(self, num_views, class_list, det_path, gt, output_dir, min_overlap=.5, cls_thresh=0, visible_thresh=0, reid_thresh=0):
+    def __init__(self, num_views, class_list, det_path, gt, output_dir, min_overlap=.5, cls_thresh=0, visible_thresh=0, reid_thresh=0, save_query=False):
         self.num_valid_cam = num_views
+        self.save_query = save_query
 
         self.gt = gt
         with open(det_path) as f:
@@ -619,6 +620,7 @@ class MessytableEval:
             det_cls = [] 
             det_score = []
             det_reid_score = []
+            det_query = []
             for inst in det :
                 det_bboxes.append(inst['camera_instances'])
                 det_is_valids.append(inst['camera_instances_valid_flag'])
@@ -626,6 +628,8 @@ class MessytableEval:
                 det_score.append(inst['detection_score'])
                 if self.reid_thresh : 
                     det_reid_score.append(inst['reid_score'])
+                if self.save_query : 
+                    det_query.append(inst['query2d'])
             det_bboxes = np.array(det_bboxes).reshape((num_det, self.num_valid_cam, -1)) #(300, num_views, 4)
             det_is_valids = np.array(det_is_valids).reshape(num_det, self.num_valid_cam) #(300, num_views)
             det_cls = np.array(det_cls) #(300,)
@@ -633,13 +637,21 @@ class MessytableEval:
             if self.reid_thresh : 
                 det_reid_score = np.array(det_reid_score) #(300,)
 
+            if self.save_query : 
+                det_query = np.array(det_query) #(300,)
+
             gt = self.DataLoader.get_gt(gt_bboxes, gt_is_valids, gt_cls)
             det = self.DataLoader.get_det(det_bboxes, det_is_valids, det_cls, det_score, det_reid_score)
 
             for cam_idx in range(self.num_valid_cam) :
                 self.Map_calculator.add_tp_fp(det[cam_idx], gt[cam_idx])
 
-            result_list.append([scene_id, gt_bboxes.transpose(1, 0, 2), gt_is_valids.transpose(1, 0), gt_cls, det_bboxes.transpose(1, 0, 2), det_is_valids.transpose(1, 0), det_cls, det_score])
+            result = [scene_id, gt_bboxes.transpose(1, 0, 2), gt_is_valids.transpose(1, 0), gt_cls, det_bboxes.transpose(1, 0, 2), det_is_valids.transpose(1, 0), det_cls, det_score]
+
+            if self.save_query :
+                result.append(det_query.transpose(1, 0, 2))
+
+            result_list.append(result)
 
         all_aps = self.Map_calculator.get_aps()
         #iou_avg = self.Map_calculator.get_iou()

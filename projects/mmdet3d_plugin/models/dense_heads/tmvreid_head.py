@@ -62,6 +62,7 @@ class TMVReidHead(TMVDetHead):
                  in_channels,
                  tp_train_only=False,
                  rpn_mask=False,
+                 no_rpn_idx = False,
                  debug=False,
                  pred_size=10,
                  num_input=300,
@@ -114,6 +115,7 @@ class TMVReidHead(TMVDetHead):
         self.debug = debug
         self.tp_train_only = tp_train_only
         self.rpn_mask = rpn_mask
+        self.no_rpn_idx = no_rpn_idx
 
         if 'code_size' in kwargs:
             self.code_size = kwargs['code_size']
@@ -367,6 +369,8 @@ class TMVReidHead(TMVDetHead):
             pos_embeds = self.position_embedding(pred_box, img_metas) #(1, 3, 300, 1, 256)
         rpn_idx_emb = self.idx_emb.repeat(batch_size, num_cams, 1, 1, 1) #(1, 3, 300, 1, 3)
         #pred_prob[:] = 1.0
+        if self.no_rpn_idx : 
+            rpn_idx_emb[:] = 0
         feats = torch.cat([pred_feats, pred_prob, rpn_idx_emb], dim=-1)  #(1, 3, 300, 1, 128+1+127)
         feats = feats.flatten(2, 3) #(1, 3, 300*1, 256)
 
@@ -1151,39 +1155,6 @@ class TMVReidHead(TMVDetHead):
 
         return init_det_points_mtv, init_det_points
 
-    @force_fp32(apply_to=('preds_dicts'))
-    def get_bboxes(self, preds_dicts, img_metas, rescale=False):
-        """Generate bboxes from bbox head predictions.
-        Args:
-            preds_dicts (tuple[list[dict]]): Prediction results.
-            img_metas (list[dict]): Point cloud and image's meta info.
-        Returns:
-            list[dict]: Decoded bbox, scores and labels after nms.
-        """
-        #preds_dicts['all_bbox_preds'] = preds_dicts['all_bbox_preds'][..., :10]
-        preds_dicts = self.bbox_coder.decode(preds_dicts)
-        num_samples = len(preds_dicts)
-
-        ret_list = []
-        for i in range(num_samples):
-            preds = preds_dicts[i]
-            bboxes = preds['bboxes']
-            #bboxes[:, 2] = bboxes[:, 2] - bboxes[:, 5] * 0.5
-            #bboxes = img_metas[i]['box_type_3d'](bboxes, bboxes.size(-1))
-            if rescale :
-                code_size = bboxes.shape[-1] // (self.num_decode_views + 1)
-                scale_factor = img_metas[0]['scale_factor'][0] 
-                bboxes[:, 0::code_size] /= scale_factor[0]
-                bboxes[:, 1::code_size] /= scale_factor[1]
-                bboxes[:, 3::code_size] /= scale_factor[2]
-                bboxes[:, 5::code_size] /= scale_factor[3]
-
-            visibles = preds['visibles']
-            scores = preds['scores']
-            labels = preds['labels']
-            ret_list.append([bboxes, visibles, scores, labels])
-        return ret_list
-
     def add_pose_info(self, init_det_points, init_det_points_mtv, img_metas):
         imgH, imgW, _, _ = img_metas[0]['ori_shape']
         # add identity pose to ego queries and make V copies of queries with viewing poses as mtv queries
@@ -1299,6 +1270,7 @@ class TMVReidHead(TMVDetHead):
             list[dict]: Decoded bbox, scores and labels after nms.
         """
         #preds_dicts['all_bbox_preds'] = preds_dicts['all_bbox_preds'][..., :10]
+        preds_dicts['all_query2ds'] = self.query2d_denorm.transpose(2,1).unsqueeze(0) #(1, 1, 900, 3, 2)
         preds_dicts = self.bbox_coder.decode(preds_dicts, self.pred_box[0])
         num_samples = len(preds_dicts)
 
@@ -1310,7 +1282,8 @@ class TMVReidHead(TMVDetHead):
             reid_scores = preds['reid_scores']
             cls_scores = preds['cls_scores']
             labels = preds['labels']
-            ret_list.append([bboxes, visibles, reid_scores, cls_scores, labels])
+            query2ds = preds['query2ds']
+            ret_list.append([bboxes, visibles, reid_scores, cls_scores, labels, query2ds])
         return ret_list
 
 

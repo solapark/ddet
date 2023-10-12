@@ -152,6 +152,7 @@ class CustomMessytableRpnDataset(CustomMessytableDataset):
                     detection_name=mapped_class_names[box['label']],
                     reid_score=box['reid_score'],
                     detection_score=box['cls_score'],
+                    query2d=box['query2d'],
                     )
                 annos.append(messytable_anno)
             messytable_annos[scene_id] = annos
@@ -182,6 +183,7 @@ def output_to_messytable_box(detection):
     reid_scores = detection['reid_scores_mtv2d'].numpy()
     cls_scores = detection['cls_scores_mtv2d'].numpy()
     labels = detection['labels_mtv2d'].numpy()
+    query2ds = detection['query2ds_mtv2d'].numpy()
 
     box_list = []
     for i in range(len(boxmtv2d)):
@@ -191,6 +193,7 @@ def output_to_messytable_box(detection):
             label = labels[i],
             reid_score = reid_scores[i],
             cls_score = cls_scores[i],
+            query2d = query2ds[i],
             )
         box_list.append(box)
     return box_list

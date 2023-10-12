@@ -76,7 +76,7 @@ class TMVReid(VEDet):
         if outs.get('all_cls_scores', None) is not None:
             bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas)
             #bbox_results = [bbox3d2result(bboxes, scores, labels) for bboxes, scores, labels in bbox_list]
-            bbox_results = [bboxmtvreid2result(bboxes, visibles, reid_scores, cls_scores, labels) for bboxes, visibles, reid_scores, cls_scores, labels in bbox_list] 
+            bbox_results = [bboxmtvreid2result(bboxes, visibles, reid_scores, cls_scores, labels, query2ds) for bboxes, visibles, reid_scores, cls_scores, labels, query2ds in bbox_list] 
             results['bbox_results'] = bbox_results
 
         return results

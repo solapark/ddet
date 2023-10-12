@@ -274,7 +274,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                          out_dir,
                          logger=None,
                          metric='bbox',
-                         result_name='pts_bbox'):
+                         result_name='pts_bbox',
+                         save_query=False):
         """Evaluation for a single model in nuScenes protocol.
 
         Args:
@@ -298,7 +299,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             output_dir=output_dir,
             cls_thresh=cls_thresh,
             visible_thresh=visible_thresh,
-            reid_thresh=reid_thresh,)
+            reid_thresh=reid_thresh,
+            save_query=save_query)
             #verbose=False)
         all_ap_dict, cur_map, self.result_list = messytable_eval.main()
         messytable_eval.log_eval()
@@ -361,7 +363,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                  show_gt=True,
                  pipeline=None,
                  visible_thresh=0,
-                 reid_thresh=0):
+                 reid_thresh=0,
+                 show_query=False):
         """Evaluation in nuScenes protocol.
 
         Args:
@@ -387,12 +390,12 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         if isinstance(result_files, dict):
             for name in result_names:
                 print('Evaluating bboxes of {}'.format(name))
-                self._evaluate_single(result_files[name], eval_thresh, visible_thresh, reid_thresh, save_dir)
+                self._evaluate_single(result_files[name], eval_thresh, visible_thresh, reid_thresh, save_dir, save_query=show_query)
         elif isinstance(result_files, str):
-            self._evaluate_single(result_files, eval_thresh, visible_thresh, reid_thresh, save_dir)
+            self._evaluate_single(result_files, eval_thresh, visible_thresh, reid_thresh, save_dir, save_query=show_query)
 
         if show:
-            self.show(img_root, save_dir, eval_thresh, pipeline=pipeline, show_gt=show_gt, visible_thresh=visible_thresh)
+            self.show(img_root, save_dir, eval_thresh, pipeline=pipeline, show_gt=show_gt, visible_thresh=visible_thresh, show_query=show_query)
 
         if tmp_dir is not None:
             tmp_dir.cleanup()
@@ -421,7 +424,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         ]
         return Compose(pipeline)
 
-    def show(self, data_root, out_dir, eval_thresh, show=True, pipeline=None, wait_time=0, show_gt = True, visible_thresh=.5):
+    def show(self, data_root, out_dir, eval_thresh, show=True, pipeline=None, wait_time=0, show_gt = True, visible_thresh=.5, show_query=False):
         """Results visualization.
 
         Args:
@@ -433,7 +436,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         """
         assert out_dir is not None, 'Expect out_dir, got none.'
         for result in self.result_list:
-            show_result_mtv2d(data_root, out_dir, result, eval_thresh=eval_thresh, show=show, wait_time=wait_time, show_gt = show_gt, visible_thresh=visible_thresh) 
+            show_result_mtv2d(data_root, out_dir, result, eval_thresh=eval_thresh, show=show, wait_time=wait_time, show_gt = show_gt, visible_thresh=visible_thresh, show_query=show_query) 
 
 def output_to_messytable_box(detection):
     """Convert the output to the box class in the nuScenes.

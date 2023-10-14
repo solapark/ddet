@@ -85,9 +85,9 @@ def imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det
         for bbox, cls in zip(cam_gt_bboxes, cam_gt_cls):
             x, y, w, h = bbox
             color = (0, 255, 0)  # Green color for ground truth
-            cv2.rectangle(img_with_bboxes, (int(x - w / 2), int(y - h / 2)), (int(x + w / 2), int(y + h / 2)), color, 2)
+            cv2.rectangle(img_with_bboxes, (int(x - w / 2), int(y - h / 2)), (int(x + w / 2), int(y + h / 2)), color, 3)
             cv2.putText(img_with_bboxes, cls, (int(x - w / 2), int(y - h / 2) - 5),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 3)
 
     # Draw detected bounding boxes
     if show_pred :

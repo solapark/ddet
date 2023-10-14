@@ -96,7 +96,8 @@ class TMVReidHead(TMVDetHead):
                          type='HungarianAssigner',
                          cls_cost=dict(type='ClassificationCost', weight=1.),
                          reg_cost=dict(type='BBoxL1Cost', weight=5.0),
-                         iou_cost=dict(type='IoUCost', iou_mode='giou', weight=2.0))),
+                         iou_cost=dict(type='IoUCost', iou_mode='giou', weight=2.0)),
+                     assigner2=None),
                  test_cfg=dict(max_per_img=100),
                  valid_range=[0.0, 1.0],
                  init_cfg=None,
@@ -154,6 +155,10 @@ class TMVReidHead(TMVDetHead):
                 assert 'assigner' in train_cfg, 'assigner should be provided '\
                     'when train_cfg is set.'
                 self.assigner = build_assigner(train_cfg['assigner'])
+                if 'assigner2' in train_cfg :
+                    self.assigner2 = build_assigner(train_cfg['assigner2'])
+                else : 
+                    self.assigner2 = None
                 # DETR sampling=False, so use PseudoSampler
                 sampler_cfg = dict(type='PseudoSampler')
                 self.sampler = build_sampler(sampler_cfg, context=self)
@@ -522,14 +527,42 @@ class TMVReidHead(TMVDetHead):
         # idx targets
         idx_targets = gt_idx.new_full(visible_score.shape, self.num_input, dtype=torch.long) #(900, 3) = 300
         idx_targets[pos_inds] = gt_idx[sampling_result.pos_assigned_gt_inds]
-        idx_weights = visible_weights #(900, 3)
+        idx_weights = torch.zeros_like(visible_score) #(900, 3=num_views)
+        idx_weights[pos_inds] = 1.0 - gt_visibles[sampling_result.pos_assigned_gt_inds] #(900, 3)
 
         # bbox targets for debugging
         bbox_targets = gt_idx.new_zeros((num_bboxes, self.num_decode_views, 4), dtype=torch.float32) #(1, 3, 300, 1)
         bbox_targets[pos_inds] = get_box_form_pred_idx(self.pred_box[0], gt_idx[sampling_result.pos_assigned_gt_inds], self.num_decode_views)
         bbox_weights = torch.zeros_like(bbox_targets)
 
-        #return (labels, label_weights, bbox_targets, bbox_weights, pos_inds, neg_inds)
+        if self.assigner2 is not None :
+            idx_scores = idx_score.reshape(-1, self.num_decode_views, self.idx_out_channels) #(900, 3, 300)
+            _, pred_idx = F.softmax(idx_scores, dim=-1).max(-1) #(900, 3), (900, 3)
+            cam_det_bboxes = get_box_form_pred_idx(self.pred_box[0], pred_idx, self.num_decode_views)
+            gt_bbox = get_box_form_pred_idx(self.pred_box[0], gt_idx, self.num_decode_views)
+
+            assign_result2 = self.assigner2.assign(pred_idx, cam_det_bboxes, gt_idx, gt_bbox, gt_labels, self.assigner.cost)
+            sampling_result2 = self.sampler.sample(assign_result2, pred_proj_cxcy, gt_proj_cxcy)
+            pos_inds2 = sampling_result2.pos_inds
+
+            if len(pos_inds2) :
+                # label targets
+                labels[pos_inds2] = gt_labels[sampling_result2.pos_assigned_gt_inds] 
+
+                # visible targets
+                visible_targets[pos_inds2] = gt_visibles[sampling_result2.pos_assigned_gt_inds]
+                visible_weights[pos_inds2] = 1.0
+
+                # reid targets
+                reid_targets[pos_inds2] = 0
+
+                # idx targets
+                idx_targets[pos_inds2] = self.assigner2.assigned_rpn_idx[pos_inds2]
+                idx_weights[pos_inds2] = 1.0 - gt_visibles[sampling_result2.pos_assigned_gt_inds] #(900, 3)
+
+                # bbox targets for debugging
+                bbox_targets[pos_inds2] = get_box_form_pred_idx(self.pred_box[0], idx_targets[pos_inds2], self.num_decode_views)
+
         return (labels, label_weights, visible_targets, visible_weights, reid_targets, reid_weights, idx_targets, idx_weights, bbox_targets, bbox_weights, pos_inds, neg_inds)
 
     #def get_targets(self, cls_scores_list, bbox_preds_list, gt_bboxes_list, gt_labels_list, gt_bboxes_ignore_list=None):
@@ -698,7 +731,7 @@ class TMVReidHead(TMVDetHead):
                 import os
                 import mmcv
 
-                save_dir = '/data3/sap/VEDet/result/tmvreid4'
+                save_dir = '/data3/sap/VEDet/result/tmvreid9'
 
                 data_root = '/'+os.path.join(*self.img_metas[0]['filename'][0].split('/')[:-1])
                 filename = self.img_metas[0]['filename'][0].split('/')[-1].split('.')[0].split('-')[:-1]

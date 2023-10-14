@@ -18,6 +18,7 @@ from mmdet.core.bbox.assigners import BaseAssigner
 from mmdet.core.bbox.match_costs import build_match_cost
 from mmdet.models.utils.transformer import inverse_sigmoid
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox, denormalize_bbox
+from mmdet.core.bbox.iou_calculators import bbox_overlaps
 
 try:
     from scipy.optimize import linear_sum_assignment
@@ -59,7 +60,8 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
                  query_cost=dict(type='QueryCost', weight=1.0),
                  align_with_loss=False,
                  pc_range=None, 
-                 rep=1):
+                 rep=1, 
+                 valid_cost_thresh=.3):
         self.cls_cost = build_match_cost(cls_cost)
         self.visible_cost = build_match_cost(visible_cost)
         self.reg_cost = build_match_cost(reg_cost)
@@ -68,6 +70,7 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
         self.align_with_loss = align_with_loss
         self.pc_range = pc_range
         self.rep = rep
+        self.valid_cost_thresh = valid_cost_thresh
 
     def assign(self, norm_pred_cxcy, cls_pred, visible_pred, reid_pred, idx_pred, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore=None, eps=1e-7, img_shape=None):
         """Computes one-to-one matching based on the weighted costs.
@@ -140,13 +143,13 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
             cost = cost + query_cost
 
         # 3. do Hungarian matching on CPU using linear_sum_assignment
-        # assign all indices to backgrounds first
         cost = cost.detach().cpu()
         if linear_sum_assignment is None:
             raise ImportError('Please run "pip install scipy" '
                               'to install scipy first.')
         cost = torch.nan_to_num(cost, nan=100.0, posinf=100.0, neginf=-100.0)
 
+        # assign all indices to backgrounds first
         assigned_gt_inds[:] = 0
         for _ in range(self.rep) :
             matched_row_inds, matched_col_inds = linear_sum_assignment(cost)
@@ -157,5 +160,7 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
             # assign foregrounds based on matching results
             assigned_gt_inds[matched_row_inds] = matched_col_inds + 1
             assigned_labels[matched_row_inds] = gt_labels[matched_col_inds]
-            cost[matched_row_inds, matched_col_inds] = 100.0
+            cost[matched_row_inds] = 100.0
+
+        self.cost = cost
         return AssignResult(num_gts, assigned_gt_inds, None, labels=assigned_labels)

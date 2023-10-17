@@ -62,8 +62,10 @@ class TMVReidHead(TMVDetHead):
                  in_channels,
                  tp_train_only=False,
                  rpn_mask=False,
+                 gt_only=False,
                  no_rpn_idx = False,
                  debug=False,
+                 debug_save_dir=None,
                  pred_size=10,
                  num_input=300,
                  input_emb_size=128,
@@ -114,9 +116,11 @@ class TMVReidHead(TMVDetHead):
         # since it brings inconvenience when the initialization of
         # `AnchorFreeHead` is called.
         self.debug = debug
+        self.debug_save_dir = debug_save_dir
         self.tp_train_only = tp_train_only
         self.rpn_mask = rpn_mask
         self.no_rpn_idx = no_rpn_idx
+        self.gt_only = gt_only
 
         if 'code_size' in kwargs:
             self.code_size = kwargs['code_size']
@@ -362,7 +366,7 @@ class TMVReidHead(TMVDetHead):
         pred_prob = pred_prob.transpose(2, 1).unsqueeze(-1).unsqueeze(-1) # (1, 3, 300, 1, 1), 
         batch_size, num_cams, feat_h, feat_w, _ = pred_feats.shape #1, 3, 300, 1
         masks = pred_feats.new_zeros((batch_size, num_cams, feat_h, feat_w)).to(torch.bool) #(1, 3, 300, 1)
-        if self.rpn_mask and not is_test:
+        if self.gt_only or (self.rpn_mask and not is_test):
             masks[:] = True
             target_idx = pred_box.new_tensor(self.img_metas[0]['pred_box_idx']).to(torch.long) #(num_target, 3)
             num_target = len(target_idx) #num_target
@@ -731,7 +735,7 @@ class TMVReidHead(TMVDetHead):
                 import os
                 import mmcv
 
-                save_dir = '/data3/sap/VEDet/result/tmvreid9'
+                save_dir = self.debug_save_dir
 
                 data_root = '/'+os.path.join(*self.img_metas[0]['filename'][0].split('/')[:-1])
                 filename = self.img_metas[0]['filename'][0].split('/')[-1].split('.')[0].split('-')[:-1]
@@ -1147,7 +1151,7 @@ class TMVReidHead(TMVDetHead):
 
         # bring back to metric values
         pad_shape = img_metas[0].get('pad_shape', [])[:V] 
-        H, W, _ = pad_shape
+        H, W = pad_shape[:2]
         img_divider = torch.Tensor([W,H]).to(intrinsics.device) #WH
 
         # normalize

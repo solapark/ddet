@@ -48,17 +48,21 @@ class TMVReid(VEDet):
         Returns:
             dict: Losses of different branches.
         """
-
-        inputs = (rpn_cxcywh, rpn_emb, rpn_prob)
+        if hasattr(self, 'img_neck'):
+            rpn_emb = self.forward_neck(rpn_emb)
 
         img_metas[0]['img'] = img
         losses = dict()
+        inputs = (rpn_cxcywh, rpn_emb, rpn_prob)
         losses_pts = self.forward_pts_train(inputs, gt_bboxes_3d, gt_labels_3d, maps, img_metas)
         losses.update(losses_pts)
         return losses
 
     def simple_test(self, img_metas, img=None, gt_map=None, rpn_cxcywh=None, rpn_emb=None, rpn_prob=None, **kwargs):
         """Test function without augmentaiton."""
+        if hasattr(self, 'img_neck'):
+            rpn_emb = self.forward_neck(rpn_emb)
+
         inputs = (rpn_cxcywh[0], rpn_emb[0], rpn_prob[0])
 
         results_list = [dict() for i in range(len(img_metas))]
@@ -80,5 +84,14 @@ class TMVReid(VEDet):
             results['bbox_results'] = bbox_results
 
         return results
+
+    def forward_neck(self, x):
+        B, H, N, C = x.size() #(1, 73, 9, 1024)
+        x = x.permute(0, 2, 3, 1) #(1, 9, 1024, 73)
+        x = x.view(B*N, C, H, 1) #(1*9, 1024, 73, 1)
+        x = self.img_neck([x]) #(1*9, 256, 73, 1)
+        x = x[0].view(B, N, -1, H, 1) #(1, 9, 256, 73, 1)
+        x = x.permute(0, 3, 1, 2, 4) #(1, 73, 9, 256, 1)
+        return x[..., 0]
 
 

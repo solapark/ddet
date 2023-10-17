@@ -79,7 +79,6 @@ model = dict(
     gt_depth_sup=False,  # use cache to supervise
     pts_bbox_head=dict(
         type='TMVReidHead',
-        #debug=True,
         emb_intrinsics=True,
         pred_size=pred_size,
         num_input=300,
@@ -117,7 +116,7 @@ model = dict(
             #type='NMSFreeCoder',
             #type='TMVDetNMSFreeCoder',
             type='TMVReidNMSFreeCoder',
-            max_num=50,
+            max_num=300,
             num_views=num_views,
             num_classes=num_classes),
         input_ray_encoding=dict(
@@ -136,12 +135,12 @@ model = dict(
             fourier_type='linear',
             fourier_channels=13 * 2 * bands,
             max_frequency=max_freq),
-        loss_cls=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
-        loss_visible=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
+        loss_cls=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0/10),
+        loss_visible=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0*3),
         loss_bbox=dict(type='L1Loss', loss_weight=.25/10),
         loss_iou=dict(type='GIoULoss', loss_weight=0.0),
         loss_reid=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
-        loss_idx=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
+        loss_idx=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0/10),
     ),
     # model training and testing settings
     train_cfg=dict(
@@ -152,13 +151,11 @@ model = dict(
             out_size_factor=4,
             assigner=dict(
                 type='HungarianAssignerMtvReid2D',
-                #type='QueryGtAssignerMtvReid2D',
                 cls_cost=dict(type='FocalLossCost', weight=0),
                 reg_cost=dict(type='BBoxMtv2DL1Cost', weight=0, pred_size=pred_size, num_views=num_views),
                 iou_cost=dict(type='BBoxMtv2DIoUCost', weight=0, pred_size=pred_size, num_views=num_views),  # Fake cost. This is just to make it compatible with DETR head. 
                 query_cost=dict(type='QueryCost', weight=1, num_views=num_views),  
                 align_with_loss=True,
-                rep=3,
                 pc_range=point_cloud_range))))
 
 dataset_type = 'CustomMessytableRpnDataset'
@@ -186,7 +183,7 @@ data_root = 'data/Messytable/rpn/'
 meta_keys = ('filename', 'ori_shape', 'img_shape', 'lidar2img', 'depth2img', 'cam2img', 'pad_shape', 'scale_factor',
              'flip', 'pcd_horizontal_flip', 'pcd_vertical_flip', 'img_norm_cfg',
              'pcd_trans', 'sample_idx', 'pcd_scale_factor', 'pcd_rotation', 'pts_filename', 'transformation_3d_flow',
-             'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp', 'rpn_x1y1x2y2', 'pred_box_idx')
+             'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp', 'rpn_x1y1x2y2')
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
     dict(type='LoadMultiViewRpnFromFiles'),
@@ -232,6 +229,7 @@ data = dict(
         # we use box_type_3d='LiDAR' in kitti and nuscenes dataset
         # and box_type_3d='Depth' in sunrgbd and scannet dataset.
         #box_type_3d='LiDAR'
+        #num_load=1
         ),
     val=dict(
         type=dataset_type,
@@ -255,7 +253,7 @@ data = dict(
         classes=class_names,
         num_views=num_views,
         #modality=input_modality,
-        num_load=1,
+        #num_load=10,
         #start_idx=65
         )
     )
@@ -276,13 +274,14 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 200
-save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn_save_img'
-#evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=True, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
-evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=True, eval_thresh=0, visible_thresh=0, reid_thresh=0, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/', show_query=True)
+save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/11'
+evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
+#evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True, out_dir='/data3/sap/VEDet/result')
+#checkpoint_config = dict(interval=24)
 checkpoint_config = dict(interval=10)
 find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-#load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
-load_from = 'work_dirs/tmvreid_messytable_rpn4/epoch_150.pth'
+load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
+#load_from = 'work_dirs/vedet_messytable2/epoch_24.pth'
 resume_from = None

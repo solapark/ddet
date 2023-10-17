@@ -7,7 +7,7 @@ plugin = True
 plugin_dir = 'projects/mmdet3d_plugin/'
 
 log_config = dict(
-    interval=50,
+    interval=10,
     hooks=[
         dict(type='TextLoggerHook'),
         dict(type='TensorboardLoggerHook')
@@ -39,8 +39,10 @@ img_norm_cfg = dict(mean=[103.530, 116.280, 123.675], std=[57.375, 57.120, 58.39
 class_names = ['water1', 'water2', 'pepsi', 'coca1', 'coca2', 'coca3', 'coca4', 'tea1', 'tea2', 'yogurt', 'ramen1', 'ramen2', 'ramen3', 'ramen4', 'ramen5', 'ramen6', 'ramen7', 'juice1', 'juice2', 'can1', 'can2', 'can3', 'can4', 'can5', 'can6', 'can7', 'can8', 'can9', 'ham1', 'ham2', 'pack1', 'pack2', 'pack3', 'pack4', 'pack5', 'pack6', 'snack1', 'snack2', 'snack3', 'snack4', 'snack5', 'snack6', 'snack7', 'snack8', 'snack9', 'snack10', 'snack11', 'snack12', 'snack13', 'snack14', 'snack15', 'snack16', 'snack17', 'snack18', 'snack19', 'snack20', 'snack21', 'snack22', 'snack23', 'snack24', 'green_apple', 'red_apple', 'tangerine', 'lime', 'lemon', 'yellow_quince', 'green_quince', 'white_quince', 'fruit1', 'fruit2', 'peach', 'banana', 'fruit3', 'pineapple', 'fruit4', 'strawberry', 'cherry', 'red_pimento', 'green_pimento', 'carrot', 'cabbage1', 'cabbage2', 'eggplant', 'bread', 'baguette', 'sandwich', 'hamburger', 'hotdog', 'donuts', 'cake', 'onion', 'marshmallow', 'mooncake', 'shirimpsushi', 'sushi1', 'sushi2', 'big_spoon', 'small_spoon', 'fork', 'knife', 'big_plate', 'small_plate', 'bowl', 'white_ricebowl', 'blue_ricebowl', 'black_ricebowl', 'green_ricebowl', 'black_mug', 'gray_mug', 'pink_mug', 'green_mug', 'blue_mug', 'blue_cup', 'orange_cup', 'yellow_cup', 'big_wineglass', 'small_wineglass', 'glass1', 'glass2', 'glass3']
 
 #input_modality = dict(use_lidar=False, use_camera=True, use_radar=False, use_map=False, use_external=False)
+save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_asnet/1'
 bands, max_freq = 64, 8
-num_views = 3
+num_views = 9
+num_input = 73
 num_classes = len(class_names)
 pred_size = 10 #cx, cy, cw, w, l, h, sin_rot, cos_rot, vx, vy
 #code_weights = [1.0] * 10 + [0.0] * 10 * num_views
@@ -75,19 +77,21 @@ model = dict(
     #        'stage4',
     #        'stage5',
     #    )),
-    #img_neck=dict(type='CPFPN', in_channels=[768, 1024], out_channels=256, num_outs=2),
+    #img_neck=dict(type='CPFPN', in_channels=[1024], out_channels=512, num_outs=1),
     gt_depth_sup=False,  # use cache to supervise
     pts_bbox_head=dict(
         type='TMVReidHead',
-        #debug=True,
         emb_intrinsics=True,
+        #debug=True,
+        debug_save_dir=save_dir,
+        gt_only=True,
         pred_size=pred_size,
-        num_input=300,
-        input_emb_size=128,
-        idx_emb_size=127,
+        num_input=num_input,
+        input_emb_size=1024,
+        idx_emb_size=31,
         num_classes=num_classes,
-        in_channels=256,
-        num_query=900,
+        in_channels=1056,
+        num_query=500,
         position_range=point_cloud_range,
         reg_hidden_dims=[512, 512],
         code_size=(num_views + 1) * 10,
@@ -105,26 +109,35 @@ model = dict(
                 transformerlayers=dict(
                     type='PETRTransformerDecoderLayer',
                     attn_cfgs=[
-                        dict(type='MultiheadAttention', embed_dims=256, num_heads=8, dropout=0.1),
-                        dict(type='PETRMultiheadAttention', embed_dims=256, num_heads=8, dropout=0.1),
+                        dict(type='MultiheadAttention', embed_dims=1056, num_heads=8, dropout=0.1),
+                        dict(type='PETRMultiheadAttention', embed_dims=1056, num_heads=8, dropout=0.1),
                     ],
                     feedforward_channels=2048,
                     ffn_dropout=0.1,
                     with_cp=True,
-                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm')),
+                    operation_order=('self_attn', 'norm', 'cross_attn', 'norm', 'ffn', 'norm'),
+                    ffn_cfgs=dict(
+                         type='FFN',
+                         embed_dims=1056,
+                         feedforward_channels=1024,
+                         num_fcs=2,
+                         ffn_drop=0.,
+                         act_cfg=dict(type='ReLU', inplace=True),
+                    )
+                ),
             )),
         bbox_coder=dict(
             #type='NMSFreeCoder',
             #type='TMVDetNMSFreeCoder',
             type='TMVReidNMSFreeCoder',
-            max_num=50,
+            max_num=300,
             num_views=num_views,
             num_classes=num_classes),
         input_ray_encoding=dict(
             type='FourierMLPEncoding',
             input_channels=15,
             hidden_dims=[int(1.5 * 15 * 2 * bands)],
-            embed_dim=256,
+            embed_dim=1056,
             fourier_type='linear',
             fourier_channels=15 * 2 * bands,
             max_frequency=max_freq),
@@ -132,7 +145,7 @@ model = dict(
             type='FourierMLPEncoding',
             input_channels=13,
             hidden_dims=[int(1.5 * 13 * 2 * bands)],
-            embed_dim=256,
+            embed_dim=1056,
             fourier_type='linear',
             fourier_channels=13 * 2 * bands,
             max_frequency=max_freq),
@@ -152,18 +165,18 @@ model = dict(
             out_size_factor=4,
             assigner=dict(
                 type='HungarianAssignerMtvReid2D',
-                #type='QueryGtAssignerMtvReid2D',
                 cls_cost=dict(type='FocalLossCost', weight=0),
                 reg_cost=dict(type='BBoxMtv2DL1Cost', weight=0, pred_size=pred_size, num_views=num_views),
                 iou_cost=dict(type='BBoxMtv2DIoUCost', weight=0, pred_size=pred_size, num_views=num_views),  # Fake cost. This is just to make it compatible with DETR head. 
                 query_cost=dict(type='QueryCost', weight=1, num_views=num_views),  
                 align_with_loss=True,
-                rep=3,
                 pc_range=point_cloud_range))))
 
 dataset_type = 'CustomMessytableRpnDataset'
 #data_root = 'data/nuscenes/'
-data_root = 'data/Messytable/rpn/'
+data_root = 'data/Messytable_ASNet/'
+pickle_model = 'asnet'
+pickle_feat_size = 1024
 
 #file_client_args = dict(backend='disk')
 #ida_aug_conf = {
@@ -189,7 +202,7 @@ meta_keys = ('filename', 'ori_shape', 'img_shape', 'lidar2img', 'depth2img', 'ca
              'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp', 'rpn_x1y1x2y2', 'pred_box_idx')
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='LoadMultiViewRpnFromFiles'),
+    dict(type='LoadMultiViewGTFeatFromFiles', num_input=num_input, num_views=num_views, feat_size=pickle_feat_size, model=pickle_model),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='LoadMultiviewTargets', num_views=num_views, rpn_mode=True),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
@@ -197,7 +210,7 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='LoadMultiViewRpnFromFiles'),
+    dict(type='LoadMultiViewGTFeatFromFiles', num_input=num_input, num_views=num_views, feat_size=pickle_feat_size, model=pickle_model),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='LoadMultiviewTargets', num_views=num_views, rpn_mode=True),
     dict(
@@ -215,8 +228,8 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=1,
-    workers_per_gpu=4,
-    #workers_per_gpu=0,
+    #workers_per_gpu=4,
+    workers_per_gpu=0,
     train=dict(
         type=dataset_type,
         data_root=data_root,
@@ -232,13 +245,14 @@ data = dict(
         # we use box_type_3d='LiDAR' in kitti and nuscenes dataset
         # and box_type_3d='Depth' in sunrgbd and scannet dataset.
         #box_type_3d='LiDAR'
+        #num_load=1
         ),
     val=dict(
         type=dataset_type,
         pipeline=test_pipeline,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_val.pkl',
-        #ann_file=data_root + 'messytable_infos_val.pkl',
         ann_file=data_root + 'messytable_infos_val.pkl',
+        #ann_file=data_root + 'messytable_infos_train.pkl',
         #ann_file=data_root + 'messytable_infos_debug.pkl',
         classes=class_names,
         num_views=num_views,
@@ -249,13 +263,13 @@ data = dict(
         type=dataset_type,
         pipeline=test_pipeline,
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_val.pkl',
-        #ann_file=data_root + 'messytable_infos_test.pkl',
         ann_file=data_root + 'messytable_infos_test.pkl',
+        #ann_file=data_root + 'messytable_infos_train.pkl',
         #ann_file=data_root + 'messytable_infos_debug.pkl',
         classes=class_names,
         num_views=num_views,
         #modality=input_modality,
-        num_load=1,
+        #num_load=10,
         #start_idx=65
         )
     )
@@ -276,13 +290,13 @@ lr_config = dict(
     min_lr_ratio=1e-3,
 )
 total_epochs = 200
-save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn_save_img'
-#evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=True, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
-evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=True, eval_thresh=0, visible_thresh=0, reid_thresh=0, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/', show_query=True)
+evaluation = dict(interval=1, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
+#evaluation = dict(interval=2, pipeline=test_pipeline, metric=['bbox'], eval_thresh=.1, show=True, out_dir='/data3/sap/VEDet/result')
+#checkpoint_config = dict(interval=24)
 checkpoint_config = dict(interval=10)
 find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 #load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
-load_from = 'work_dirs/tmvreid_messytable_rpn4/epoch_150.pth'
+load_from = 'work_dirs/tmvreid_messytable_rpn/epoch_200.pth'
 resume_from = None

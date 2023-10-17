@@ -272,6 +272,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                          visible_thresh,
                          reid_thresh,
                          out_dir,
+                         img_dir,
                          logger=None,
                          metric='bbox',
                          result_name='pts_bbox',
@@ -297,6 +298,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             det_path=result_path,
             gt = self.data_infos,
             output_dir=output_dir,
+            img_dir=img_dir,
             cls_thresh=cls_thresh,
             visible_thresh=visible_thresh,
             reid_thresh=reid_thresh,
@@ -390,9 +392,9 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         if isinstance(result_files, dict):
             for name in result_names:
                 print('Evaluating bboxes of {}'.format(name))
-                self._evaluate_single(result_files[name], eval_thresh, visible_thresh, reid_thresh, save_dir, save_query=show_query)
+                self._evaluate_single(result_files[name], eval_thresh, visible_thresh, reid_thresh, save_dir, img_root, save_query=show_query)
         elif isinstance(result_files, str):
-            self._evaluate_single(result_files, eval_thresh, visible_thresh, reid_thresh, save_dir, save_query=show_query)
+            self._evaluate_single(result_files, eval_thresh, visible_thresh, reid_thresh, save_dir, img_root, save_query=show_query)
 
         if show:
             self.show(img_root, save_dir, eval_thresh, pipeline=pipeline, show_gt=show_gt, visible_thresh=visible_thresh, show_query=show_query)

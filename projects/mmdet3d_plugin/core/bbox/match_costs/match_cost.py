@@ -177,4 +177,41 @@ class QueryCost(object):
         cxcy_cost = torch.stack(cxcy_cost_list, -1) #(num_pred, num_gt)
         return cxcy_cost * self.weight
 
+@MATCH_COST.register_module()
+class RpnCost(object):
+    """BBox3DL1Cost.
+     Args:
+         weight (int | float, optional): loss_weight
+    """
+
+    def __init__(self, num_views=3):
+        self.num_views = num_views
+
+    def __call__(self, cxcy_query, rpn_cxcy):
+        """
+        Args:
+            cxcy_query (Tensor): Predicted boxes with normalized coordinates
+                (cx, cy), which are all in range [0, 1]. Shape
+                [num_query, (num_views)*2].
+            rpn_cxcy (Tensor): Ground truth boxes with normalized coordinates
+                (cx, cy), which are all in range [0, 1]. Shape
+                coordinates (cx, cy). Shape 
+                [num_rpn, (num_view)*2].
+            rpn_visible (Tensor): visibility of Ground truth boxes
+                1=non_visible, 0=visible
+                Shape [num_rpn, num_view].
+        Returns:
+            torch.Tensor: cxcy_cost value with weight
+        """
+        cxcy_cost_list = [] #(num_rpn, num_query, 1)
+        for i in range(self.num_views):
+            cur_cxcy_query = cxcy_query[:, i] #(900, 2)
+            cur_rpn_cxcys = rpn_cxcy[:, i] #(num_rpn, 2)
+
+            cxcy_cost = torch.cdist(cur_cxcy_query, cur_rpn_cxcys, p=2) #(900, num_rpn)
+            cxcy_cost_list.append(cxcy_cost)
+
+        cxcy_cost = torch.stack(cxcy_cost_list, 0) #(3, 900, num_rpn)
+        return cxcy_cost
+
 

@@ -84,7 +84,7 @@ model = dict(
         emb_intrinsics=True,
         #debug=True,
         debug_save_dir=save_dir,
-        gt_only=True,
+        #gt_only=True,
         pred_size=pred_size,
         num_input=num_input,
         input_emb_size=1024,
@@ -202,7 +202,7 @@ meta_keys = ('filename', 'ori_shape', 'img_shape', 'lidar2img', 'depth2img', 'ca
              'intrinsics', 'extrinsics', 'scale_ratio', 'dec_extrinsics', 'timestamp', 'rpn_x1y1x2y2', 'pred_box_idx')
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='LoadMultiViewGTFeatFromFiles', num_input=num_input, num_views=num_views, feat_size=pickle_feat_size, model=pickle_model),
+    dict(type='LoadMultiViewGTFeatFromFiles', num_input=num_input, num_views=num_views, feat_size=pickle_feat_size, model=pickle_model, empty_emb_is_one=True),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='LoadMultiviewTargets', num_views=num_views, rpn_mode=True),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
@@ -210,7 +210,7 @@ train_pipeline = [
 ]
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='LoadMultiViewGTFeatFromFiles', num_input=num_input, num_views=num_views, feat_size=pickle_feat_size, model=pickle_model),
+    dict(type='LoadMultiViewGTFeatFromFiles', num_input=num_input, num_views=num_views, feat_size=pickle_feat_size, model=pickle_model, empty_emb_is_one=True),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='LoadMultiviewTargets', num_views=num_views, rpn_mode=True),
     dict(
@@ -300,5 +300,5 @@ find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 #load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
-load_from = 'work_dirs/tmvreid_messytable_rpn/epoch_200.pth'
+load_from = 'work_dirs/tmvreid_messytable_asnet/epoch_96.pth'
 resume_from = None

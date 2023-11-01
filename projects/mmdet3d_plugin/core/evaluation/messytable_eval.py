@@ -13,7 +13,7 @@ from .detection.map import Map_calculator
 from .reid.map import Reid_evaluator
 
 class MessytableEval:
-    def __init__(self, num_views, class_list, det_path, gt, output_dir, img_dir, min_overlap=.5, cls_thresh=0, visible_thresh=0, reid_thresh=0, save_query=False):
+    def __init__(self, num_views, class_list, det_path, gt, output_dir, img_dir, min_overlap=.5, cls_thresh=0, visible_thresh=0, reid_thresh=0, save_query=False, gt_path=None):
         self.num_valid_cam = num_views
         self.save_query = save_query
 
@@ -28,7 +28,7 @@ class MessytableEval:
         self.Log_manager = Log_manager(output_dir, class_list)
 
         self.json_save_path = os.path.join(output_dir, 'det.json')
-        #self.Json_saver = Json_saver(img_dir, self.json_save_path)
+        self.Json_saver = Json_saver(img_dir, self.json_save_path, num_views, gt_path)
 
         #self.Reid_evaluator = Reid_evaluator(img_dir, self.json_save_path)
 
@@ -76,7 +76,7 @@ class MessytableEval:
             for cam_idx in range(self.num_valid_cam) :
                 self.Map_calculator.add_tp_fp(det[cam_idx], gt[cam_idx])
 
-            #self.Json_saver.add_data(scene_id, det)
+            self.Json_saver.add_data(scene_id, det)
 
             result = [scene_id, gt_bboxes.transpose(1, 0, 2), gt_is_valids.transpose(1, 0), gt_cls, det_bboxes.transpose(1, 0, 2), det_is_valids.transpose(1, 0), det_cls, det_score]
 
@@ -85,7 +85,7 @@ class MessytableEval:
 
             result_list.append(result)
 
-        #self.Json_saver.close()
+        self.Json_saver.close()
         #reid_eval_result = self.Reid_evaluator.eval()
 
         all_aps = self.Map_calculator.get_aps()

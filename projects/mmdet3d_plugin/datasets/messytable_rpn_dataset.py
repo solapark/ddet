@@ -94,6 +94,10 @@ class CustomMessytableRpnDataset(CustomMessytableDataset):
             probs=info['probs'] #(num_inst, num_cam)    
         )
 
+        if 'pred_box_idx_org' in info.keys():
+            input_dict['pred_box_idx_org']=info['pred_box_idx_org'] #(num_inst, num_cam) #cam1_idx,cam2_idx,cam3_idx
+
+
         image_paths = []
         world2img_rts = []
         intrinsics = []

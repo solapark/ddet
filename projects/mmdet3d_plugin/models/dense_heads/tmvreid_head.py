@@ -60,6 +60,8 @@ class TMVReidHead(TMVDetHead):
 
     def __init__(self,
                  in_channels,
+                 include_attn_map=False,
+                 query_pos3d_emb=False,
                  tp_train_only=False,
                  rpn_mask=False,
                  gt_only=False,
@@ -81,6 +83,7 @@ class TMVReidHead(TMVDetHead):
                  input_pts_encoding=None,
                  output_det_encoding=None,
                  output_seg_encoding=None,
+                 query_encoding=None,
                  emb_intrinsics=False,
                  code_weights=None,
                  num_decode_views=2,
@@ -91,15 +94,19 @@ class TMVReidHead(TMVDetHead):
                  loss_visible=None,
                  loss_reid=None,
                  loss_idx=None,
+                 loss_rpn=None,
                  loss_iou=None,
                  loss_seg=None,
+                 loss_self_attn_map=None,
                  train_cfg=dict(
                      assigner=dict(
                          type='HungarianAssigner',
                          cls_cost=dict(type='ClassificationCost', weight=1.),
                          reg_cost=dict(type='BBoxL1Cost', weight=5.0),
                          iou_cost=dict(type='IoUCost', iou_mode='giou', weight=2.0)),
-                     assigner2=None),
+                     assigner2=None,
+                     assigner2_rpn_only=False,
+                     rpn_assigner=None),
                  test_cfg=dict(max_per_img=100),
                  valid_range=[0.0, 1.0],
                  init_cfg=None,
@@ -121,6 +128,8 @@ class TMVReidHead(TMVDetHead):
         self.rpn_mask = rpn_mask
         self.no_rpn_idx = no_rpn_idx
         self.gt_only = gt_only
+        self.query_pos3d_emb = query_pos3d_emb
+        self.include_attn_map = include_attn_map
 
         if 'code_size' in kwargs:
             self.code_size = kwargs['code_size']
@@ -161,8 +170,13 @@ class TMVReidHead(TMVDetHead):
                 self.assigner = build_assigner(train_cfg['assigner'])
                 if 'assigner2' in train_cfg :
                     self.assigner2 = build_assigner(train_cfg['assigner2'])
+                    self.assigner2_rpn_only = train_cfg['assigner2_rpn_only']
                 else : 
                     self.assigner2 = None
+                if 'rpn_assigner' in train_cfg :
+                    self.rpn_assigner = build_assigner(train_cfg['rpn_assigner'])
+                else : 
+                    self.rpn_assigner = None
                 # DETR sampling=False, so use PseudoSampler
                 sampler_cfg = dict(type='PseudoSampler')
                 self.sampler = build_sampler(sampler_cfg, context=self)
@@ -182,9 +196,11 @@ class TMVReidHead(TMVDetHead):
         self.loss_bbox = build_loss(loss_bbox) if loss_bbox else None
         self.loss_iou = build_loss(loss_iou) if loss_iou else None
         self.loss_seg = build_loss(loss_seg) if loss_seg else None
-        self.loss_reid = build_loss(loss_reid) if loss_cls else None
-        self.loss_idx = build_loss(loss_idx) if loss_cls else None
-        self.loss_visible = build_loss(loss_visible) if loss_cls else None
+        self.loss_reid = build_loss(loss_reid) if loss_reid else None
+        self.loss_idx = build_loss(loss_idx) if loss_idx else None
+        self.loss_rpn = build_loss(loss_rpn) if loss_rpn else None
+        self.loss_visible = build_loss(loss_visible) if loss_visible else None
+        self.loss_self_attn_map = build_loss(loss_self_attn_map) if loss_self_attn_map else None
 
         if self.loss_cls is not None and self.loss_cls.use_sigmoid:
             self.cls_out_channels = num_classes
@@ -210,7 +226,8 @@ class TMVReidHead(TMVDetHead):
         self.input_ray_encoding = build_positional_encoding(input_ray_encoding) if input_ray_encoding else None
         self.input_pts_encoding = build_positional_encoding(input_pts_encoding) if input_pts_encoding else None
         #self.output_det_encoding = build_positional_encoding(output_det_encoding) if output_det_encoding else None
-        self.output_det_encoding = None
+        #self.output_det_encoding = None
+        self.query_encoding = build_positional_encoding(query_encoding) if query_encoding else None
         self.output_det_2d_encoding = build_positional_encoding(output_det_encoding) if output_det_encoding else None
         self.output_seg_encoding = build_positional_encoding(output_seg_encoding) if output_seg_encoding else None
 
@@ -219,6 +236,25 @@ class TMVReidHead(TMVDetHead):
         self.code_weights = nn.Parameter(torch.tensor(self.code_weights, requires_grad=False), requires_grad=False)
         self.bbox_coder = build_bbox_coder(bbox_coder) if bbox_coder else None
         self.pc_range = position_range
+
+
+        if self.loss_self_attn_map is not None :
+            num_total = self.num_query*self.num_decode_views
+            self_attn_map_targets = torch.ones((num_total,num_total), dtype=torch.long) #(2700, 2700) #0=same_query, 1=different_query
+            for i in range(num_total):
+                j = i%self.num_query
+                self_attn_map_targets[i, j::self.num_query] = 0
+            #self.self_attn_map_targets = nn.Parameter(torch.tensor(self_attn_map_targets, requires_grad=False), requires_grad=False)
+            self.self_attn_map_targets = self_attn_map_targets
+
+            self_attn_map_weights = torch.ones((num_total, num_total)) #(2700, 2700)
+            for i in range(self.num_decode_views):
+                self_attn_map_weights[i * self.num_query:(i + 1) * self.num_query, i * self.num_query:(i + 1) * self.num_query] = 0
+            self.self_attn_map_weights = nn.Parameter(torch.tensor(self_attn_map_weights, requires_grad=False), requires_grad=False)
+
+            num_total_pos_self_attn_maps = self.num_query * self.num_decode_views * (self.num_decode_views - 1) # 900 * 3 * 2
+            num_total_neg_self_attn_maps = num_total**2  - (self.num_query * self.num_query * self.num_decode_views) - num_total_pos_self_attn_maps # (900*3)*(900*3) - 900*900*3 - (900*3)*2
+            self.self_attn_maps_avg_factor = num_total_pos_self_attn_maps * 1.0 + num_total_neg_self_attn_maps * 0.0
 
         if rpn_idx_learnable :
             self.idx_emb = nn.Parameter(torch.rand((num_input, 1, idx_emb_size))) #(300, 1, 127)
@@ -278,6 +314,7 @@ class TMVReidHead(TMVDetHead):
             pass
 
         self.loss_visible = build_loss(loss_visible) if loss_visible else None
+        self.loss_rpn = build_loss(loss_rpn) if loss_rpn else None
         self.pred_size = pred_size
         self.emb_intrinsics = emb_intrinsics
 
@@ -395,18 +432,19 @@ class TMVReidHead(TMVDetHead):
             self.query3d_norm, self.query3d_denorm = init_det_points, query3d_denorm #(1, 1, 900, 3), #(1, 1, 900, 3)
             self.query2d_norm, self.query2d_denorm = init_det_points_mtv, query2d_denorm
 
-            init_det_points, init_det_points_mtv = self.add_pose_info(init_det_points, init_det_points_mtv, img_metas) #(1, 2, 900, 13) 
+            _, init_det_points_mtv = self.add_pose_info(init_det_points, init_det_points_mtv, img_metas) #(1, 2, 900, 13) 
 
             # TODO: seg points
             init_seg_points = None
 
             # transformer decode
             num_decode_views = init_det_points_mtv.shape[1] if init_det_points_mtv is not None else 0 #3
-            det_outputs, regs, seg_outputs = self.det_transformer(feats, masks, pos_embeds, init_det_points,
+            #det_outputs, regs, seg_outputs = self.det_transformer(feats, masks, pos_embeds, None,
+            det_outputs, regs, seg_outputs, self_attn_map, cross_attn_map = self.det_transformer(feats, masks, pos_embeds, init_det_points,
                                                                   init_det_points_mtv, init_seg_points,
                                                                   #self.output_det_encoding, self.output_seg_encoding,
-                                                                  [self.output_det_encoding, self.output_det_2d_encoding], self.output_seg_encoding,
-                                                                  self.reg_branch, num_decode_views) #(6, 1, 3, 900, 256), [], []
+                                                                  [self.query_encoding, self.output_det_2d_encoding], self.output_seg_encoding, 
+                                                                  self.reg_branch, num_decode_views, self.include_attn_map) #(6, 1, 3, 900, 256), [], [], #(6, 1, 2700, 2700), #(6, 1, 2700, 900)
 
             # detection from queries
             #if len(det_outputs) > 0 and len(regs) > 0:
@@ -469,6 +507,8 @@ class TMVReidHead(TMVDetHead):
             'all_seg_preds': seg_scores, #None
             'enc_cls_scores': None,
             'enc_bbox_preds': None,
+            'all_self_attn_maps': self_attn_map, #(6, 1, 2700, 2700)
+            'all_cross_attn_maps': cross_attn_map, #(6, 1, 2700, 900)
         }
         return outs
 
@@ -501,7 +541,8 @@ class TMVReidHead(TMVDetHead):
         # assigner and sampler
         #assign_result = self.assigner.assign(bbox_pred, cls_score, gt_bboxes, gt_labels, gt_bboxes_ignore,
         pred_proj_cxcy = self.query2d_norm[0].transpose(1,0).flatten(1,2) #(900, 3*2)
-        assign_result = self.assigner.assign(pred_proj_cxcy, cls_score, visible_score, reid_score, idx_score, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore, img_shape = self.img_metas[0]['pad_shape'][:2])
+        img_shape = self.img_metas[0]['pad_shape'][:2]
+        assign_result = self.assigner.assign(pred_proj_cxcy, cls_score, visible_score, reid_score, idx_score, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore, img_shape = img_shape)
         sampling_result = self.sampler.sample(assign_result, pred_proj_cxcy, gt_proj_cxcy)
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
@@ -539,6 +580,10 @@ class TMVReidHead(TMVDetHead):
         bbox_targets[pos_inds] = get_box_form_pred_idx(self.pred_box[0], gt_idx[sampling_result.pos_assigned_gt_inds], self.num_decode_views)
         bbox_weights = torch.zeros_like(bbox_targets)
 
+        rpn_assign_result = None
+        if self.rpn_assigner is not None :
+            rpn_assign_result = self.rpn_assigner.assign(self.query2d_norm[0], self.pred_box[0], img_shape)
+
         if self.assigner2 is not None :
             idx_scores = idx_score.reshape(-1, self.num_decode_views, self.idx_out_channels) #(900, 3, 300)
             _, pred_idx = F.softmax(idx_scores, dim=-1).max(-1) #(900, 3), (900, 3)
@@ -550,15 +595,16 @@ class TMVReidHead(TMVDetHead):
             pos_inds2 = sampling_result2.pos_inds
 
             if len(pos_inds2) :
-                # label targets
-                labels[pos_inds2] = gt_labels[sampling_result2.pos_assigned_gt_inds] 
+                if not self.assigner2_rpn_only :
+                    # label targets
+                    labels[pos_inds2] = gt_labels[sampling_result2.pos_assigned_gt_inds] 
 
-                # visible targets
-                visible_targets[pos_inds2] = gt_visibles[sampling_result2.pos_assigned_gt_inds]
-                visible_weights[pos_inds2] = 1.0
+                    # visible targets
+                    visible_targets[pos_inds2] = gt_visibles[sampling_result2.pos_assigned_gt_inds]
+                    visible_weights[pos_inds2] = 1.0
 
-                # reid targets
-                reid_targets[pos_inds2] = 0
+                    # reid targets
+                    reid_targets[pos_inds2] = 0
 
                 # idx targets
                 idx_targets[pos_inds2] = self.assigner2.assigned_rpn_idx[pos_inds2]
@@ -567,7 +613,7 @@ class TMVReidHead(TMVDetHead):
                 # bbox targets for debugging
                 bbox_targets[pos_inds2] = get_box_form_pred_idx(self.pred_box[0], idx_targets[pos_inds2], self.num_decode_views)
 
-        return (labels, label_weights, visible_targets, visible_weights, reid_targets, reid_weights, idx_targets, idx_weights, bbox_targets, bbox_weights, pos_inds, neg_inds)
+        return (labels, label_weights, visible_targets, visible_weights, reid_targets, reid_weights, idx_targets, idx_weights, bbox_targets, bbox_weights, rpn_assign_result, pos_inds, neg_inds)
 
     #def get_targets(self, cls_scores_list, bbox_preds_list, gt_bboxes_list, gt_labels_list, gt_bboxes_ignore_list=None):
     def get_targets(self, cls_scores_list, visible_scores_list, reid_scores_list, idx_scores_list, bbox_preds_list, gt_bboxes_list, gt_labels_list, gt_visibles_list, gt_idx_list, gt_proj_cxcy_list, gt_bboxes_ignore_list=None):
@@ -605,13 +651,13 @@ class TMVReidHead(TMVDetHead):
         num_imgs = len(cls_scores_list)
         gt_bboxes_ignore_list = [gt_bboxes_ignore_list for _ in range(num_imgs)]
 
-        (labels_list, label_weights_list, visibles_list, visible_weights_list, reid_list, reid_weights_list, idx_list, idx_weights_list, bbox_targets_list, bbox_weights_list, pos_inds_list,
+        (labels_list, label_weights_list, visibles_list, visible_weights_list, reid_list, reid_weights_list, idx_list, idx_weights_list, bbox_targets_list, bbox_weights_list, rpn_assign_result_list, pos_inds_list,
          neg_inds_list) = multi_apply(self._get_target_single, cls_scores_list, visible_scores_list, reid_scores_list, idx_scores_list, bbox_preds_list, gt_labels_list, gt_visibles_list, gt_idx_list, gt_proj_cxcy_list, 
                                       gt_bboxes_list, gt_bboxes_ignore_list)
 
         num_total_pos = sum((inds.numel() for inds in pos_inds_list))
         num_total_neg = sum((inds.numel() for inds in neg_inds_list))
-        return (labels_list, label_weights_list, visibles_list, visible_weights_list, reid_list, reid_weights_list, idx_list, idx_weights_list, bbox_targets_list, bbox_weights_list, num_total_pos, num_total_neg)
+        return (labels_list, label_weights_list, visibles_list, visible_weights_list, reid_list, reid_weights_list, idx_list, idx_weights_list, bbox_targets_list, bbox_weights_list, rpn_assign_result_list, num_total_pos, num_total_neg)
 
     def loss_single(self,
                     cls_scores,
@@ -620,6 +666,8 @@ class TMVReidHead(TMVDetHead):
                     idx_scores,
                     bbox_preds,
                     seg_preds,
+                    self_attn_maps,
+                    cross_attn_maps,
                     gt_bboxes_list,
                     gt_labels_list,
                     gt_visibles_list,
@@ -645,7 +693,7 @@ class TMVReidHead(TMVDetHead):
             dict[str, Tensor]: A dictionary of loss components for outputs from
                 a single decoder layer.
         """
-        loss_cls, loss_visible, loss_bbox, loss_seg = None, None, None, None
+        loss_cls, loss_visible, loss_bbox, loss_seg, loss_self_attn_map, loss_rpn = None, None, None, None, None, None
         if cls_scores is not None:
             num_imgs = cls_scores.size(0) #1
             cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
@@ -655,7 +703,7 @@ class TMVReidHead(TMVDetHead):
             #bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
             bbox_preds_list = [None for i in range(num_imgs)]
             targets = self.get_targets(cls_scores_list, visible_scores_list, reid_scores_list, idx_scores_list, bbox_preds_list, gt_bboxes_list, gt_labels_list, gt_visibles_list, gt_idx_list, gt_proj_cxcy_list, gt_bboxes_ignore_list)
-            (labels_list, label_weights_list, visibles_list, visible_weights_list, reid_list, reid_weights_list, idx_list, idx_weights_list, bbox_targets_list, bbox_weights_list, num_total_pos, num_total_neg) = targets
+            (labels_list, label_weights_list, visibles_list, visible_weights_list, reid_list, reid_weights_list, idx_list, idx_weights_list, bbox_targets_list, bbox_weights_list, rpn_assign_result_list, num_total_pos, num_total_neg) = targets
             labels = torch.cat(labels_list, 0)
             label_weights = torch.cat(label_weights_list, 0)
             visibles = torch.cat(visibles_list, 0)
@@ -706,26 +754,21 @@ class TMVReidHead(TMVDetHead):
             idx_avg_factor = visible_cls_avg_factor
             loss_idx = self.loss_idx(idx_scores, idx, idx_weights, avg_factor=idx_avg_factor)
 
+            if self.rpn_assigner is not None :
+                idx_scores_reshape = idx_scores.reshape(-1, self.num_decode_views, self.idx_out_channels) #(900, 3, 300)
+                pos_inds, neg_inds, margin = rpn_assign_result_list[0]
+                loss_rpn = self.loss_rpn(idx_scores_reshape[pos_inds], idx_scores_reshape[neg_inds], margin)
+
+            # self attn loss
+            if self.loss_self_attn_map is not None:
+                self_attn_maps_targets = self.self_attn_maps_targets.to(self_attn_maps.device)
+                loss_self_attn_map = self.loss_self_attn_map(self_attn_maps.reshape(-1, 1), self_attn_maps_targets.reshape(-1, ), self.self_attn_maps_weights, avg_factor=self.self_attn_maps_avg_factor)
+                loss_self_attn_map = torch.nan_to_num(loss_self_attn_map)
+
             # Compute the average number of gt boxes accross all gpus, for
             # normalization purposes
             num_total_pos = loss_cls.new_tensor([num_total_pos])
             num_total_pos = torch.clamp(reduce_mean(num_total_pos), min=1).item()
-
-            '''
-            # regression L1 loss
-            bbox_preds = bbox_preds.reshape(-1, bbox_preds.size(-1))
-            normalized_bbox_targets = normalize_bbox(bbox_targets, self.pc_range)
-            valid_code_idx = torch.where(self.code_weights>0)[0]
-            #isnotnan = torch.isfinite(normalized_bbox_targets).all(dim=-1)
-            isnotnan = torch.isfinite(normalized_bbox_targets[:, valid_code_idx]).all(dim=-1)
-            #bbox_weights = bbox_weights * self.code_weights 
-            bbox_weights = bbox_weights * self.code_weights 
-            normalized_bbox_targets = torch.nan_to_num(normalized_bbox_targets, nan=0, posinf=0, neginf=0)
-
-            #input_img_h, input_img_w, _ = self.img_metas[0]['pad_shape'][0]
-            #normalized_bbox_targets[..., 0::10] = normalized_bbox_targets[..., 0::10] / input_img_w
-            #normalized_bbox_targets[..., 1::10] = normalized_bbox_targets[..., 1::10] / input_img_h
-            '''
 
             if self.debug :
                 #self.debug = 0
@@ -742,8 +785,17 @@ class TMVReidHead(TMVDetHead):
                 scene_id = '-'.join(filename)
 
                 idx_scores = idx_scores.reshape(-1, self.num_decode_views, self.idx_out_channels) #(900, 3, 300)
+                if self.gt_only:
+                    masks = idx_scores.new_ones(idx_scores.shape).to(torch.bool) #(900, 3, 300)
+                    target_idx = self.pred_box[0].new_tensor(self.img_metas[0]['pred_box_idx']).to(torch.long) #(num_target, 3)
+                    num_target = len(target_idx) #num_target
+                    cam_idx = torch.arange(self.num_decode_views).repeat(num_target, 1).flatten(0,1) #(3, )->(num_target, 3)->(num_target*3, )
+                    target_idx = target_idx.flatten(0,1) #(num_target*3, )
+                    masks[:, cam_idx[target_idx>-1], target_idx[target_idx>-1]] = False
+                    idx_scores[masks] = -100. 
                 pred_idx_scores, pred_idx = F.softmax(idx_scores, dim=-1).max(-1) #(900, 3), (900, 3)
                 pred_cls_scores, pred_labels = F.softmax(cls_scores, dim=-1)[..., :-1].max(-1)
+                preds_query = self.query2d_denorm.transpose(2,1)[0] #(900, 3, 2)
 
                 target_idx = torch.where(labels!=120)[0] #(7,)
 
@@ -756,6 +808,7 @@ class TMVReidHead(TMVDetHead):
                     cam_labels = pred_labels[target_idx]
                     cam_pred_idx = pred_idx[target_idx]
                     cam_is_valids = visible_scores[target_idx]
+                    cam_preds_query = preds_query[target_idx]
 
                     cam_det_bboxes = get_box_form_pred_idx(self.pred_box[0], cam_pred_idx, self.num_decode_views)
 
@@ -763,7 +816,7 @@ class TMVReidHead(TMVDetHead):
                     cam_det_scores = cls_scores.sigmoid()[target_idx][(torch.arange(len(cam_labels)), cam_labels)] #(num_pred,) #float
                     cam_reid_scores = reid_scores.sigmoid()[target_idx].squeeze()
 
-                    return cam_det_bboxes.transpose(1, 0).cpu().detach().numpy(), cam_is_valids.transpose(1, 0).cpu().detach().numpy(), cam_reid_scores.cpu().detach().numpy(), cam_det_cls, cam_det_scores.cpu().detach().numpy() 
+                    return cam_det_bboxes.transpose(1, 0).cpu().detach().numpy(), cam_is_valids.transpose(1, 0).cpu().detach().numpy(), cam_reid_scores.cpu().detach().numpy(), cam_det_cls, cam_det_scores.cpu().detach().numpy(), cam_preds_query.transpose(1, 0).cpu().detach().numpy()
 
                 is_draw_gt_target = True
                 #is_draw_gt_target = 0
@@ -771,29 +824,44 @@ class TMVReidHead(TMVDetHead):
                     draw_idx = target_idx
                     save_name = 'gt_target' 
                     cur_save_dir = os.path.join(save_dir, save_name)
-                    cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores = result_from_idx(draw_idx)
-                    #cam_is_valids[:] = 1
-                    result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores)
-                    show_result_mtv2d(data_root, cur_save_dir, result, 0) 
+                    cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores, cam_preds_query = result_from_idx(draw_idx)
+                    cam_is_valids[:] = 1
+                    result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores, cam_preds_query)
+                    show_result_mtv2d(data_root, cur_save_dir, result, 0, show_query=True) 
 
-                #is_draw_pred = True
-                is_draw_pred = 0
+                is_draw_triplet =False 
+                #is_draw_gt_target = 0
+                if is_draw_triplet : 
+                    draw_idx = pos_inds[:2]
+                    save_name = 'triplet' 
+                    cur_save_dir = os.path.join(save_dir, save_name)
+                    cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores, cam_preds_query = result_from_idx(draw_idx)
+                    cam_is_valids[:] = 1
+                    result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores, cam_preds_query)
+                    show_result_mtv2d(data_root, cur_save_dir, result, 0, show_query=True) 
+
+                is_draw_pred = True
+                #is_draw_pred = 0
                 if is_draw_pred :
                     draw_thresh = .1
                     draw_idx = torch.where(reid_scores.sigmoid()>draw_thresh)[0] #(num_pred, )
-                    save_name = 'pred_thresh%.2f'%(draw_thresh) 
-                    cur_save_dir = os.path.join(save_dir, save_name)
-                    cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores = result_from_idx(draw_idx)
-                    result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores)
-                    show_result_mtv2d(data_root, cur_save_dir, result, 0) 
+                    if len(draw_idx):
+                        save_name = 'pred_thresh%.2f'%(draw_thresh) 
+                        cur_save_dir = os.path.join(save_dir, save_name)
+                        cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores, cam_preds_query = result_from_idx(draw_idx)
+                        cam_is_valids[:] = 1
+                        result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores, cam_preds_query)
+                        show_result_mtv2d(data_root, cur_save_dir, result, 0, show_query=True) 
 
                     draw_thresh = .3
                     draw_idx = torch.where(reid_scores.sigmoid()>draw_thresh)[0] #(num_pred, )
-                    save_name = 'pred_thresh%.2f'%(draw_thresh) 
-                    cur_save_dir = os.path.join(save_dir, save_name)
-                    cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores = result_from_idx(draw_idx)
-                    result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores)
-                    show_result_mtv2d(data_root, cur_save_dir, result, 0) 
+                    if len(draw_idx):
+                        save_name = 'pred_thresh%.2f'%(draw_thresh) 
+                        cur_save_dir = os.path.join(save_dir, save_name)
+                        cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores, cam_preds_query = result_from_idx(draw_idx)
+                        cam_is_valids[:] = 1
+                        result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores, cam_preds_query)
+                        show_result_mtv2d(data_root, cur_save_dir, result, 0, show_query=True) 
 
                 #is_draw_gt = True
                 is_draw_gt = 0
@@ -801,7 +869,7 @@ class TMVReidHead(TMVDetHead):
                     draw_idx = target_idx
                     save_name = 'gt' 
                     cur_save_dir = os.path.join(save_dir, save_name)
-                    cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores = result_from_idx(draw_idx)
+                    cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores, cam_preds_query = result_from_idx(draw_idx)
                     result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores)
                     show_result_mtv2d(data_root, cur_save_dir, result, 0, show_pred=False, show_gt=True) 
 
@@ -988,7 +1056,11 @@ class TMVReidHead(TMVDetHead):
             loss_seg = self.loss_seg(seg_preds, gt_seg_list[0])
             loss_seg = torch.nan_to_num(loss_seg)
 
-        return loss_cls, loss_visible, loss_reid, loss_idx, loss_bbox, loss_seg
+        if seg_preds is not None:
+            loss_seg = self.loss_seg(seg_preds, gt_seg_list[0])
+            loss_seg = torch.nan_to_num(loss_seg)
+
+        return loss_cls, loss_visible, loss_reid, loss_idx, loss_bbox, loss_seg, loss_self_attn_map, loss_rpn
 
     @force_fp32(apply_to=('preds_dicts'))
     def loss(
@@ -1040,6 +1112,8 @@ class TMVReidHead(TMVDetHead):
             enc_cls_scores = preds_dicts['enc_cls_scores']
             enc_bbox_preds = preds_dicts['enc_bbox_preds']
             all_seg_preds = preds_dicts['all_seg_preds']
+            all_self_attn_maps = preds_dicts['all_self_attn_maps']
+            all_cross_attn_maps = preds_dicts['all_cross_attn_maps']
 
             num_dec_layers = len(all_cls_scores) if all_cls_scores is not None else len(all_seg_preds)
             all_gt_bboxes_list = [None] * num_dec_layers
@@ -1079,10 +1153,16 @@ class TMVReidHead(TMVDetHead):
             else:
                 all_seg_preds = [None] * num_dec_layers
 
+            if all_self_attn_maps is None:
+                all_self_attn_maps = [None] * num_dec_layers
+
+            if all_cross_attn_maps is None:
+                all_cross_attn_maps = [None] * num_dec_layers
+
             if self.debug : 
-                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg = multi_apply(self.loss_single, all_cls_scores[-1:], all_visible_scores[-1:], all_reid_scores[-1:], all_idx_scores[-1:], all_bbox_preds[-1:], all_seg_preds[-1:], all_gt_bboxes_list[-1:], all_gt_labels_list[-1:], all_gt_visibles_list[-1:], all_gt_idx_list[-1:], all_gt_proj_cxcy_list[-1:], all_gt_seg_list[-1:], all_gt_bboxes_ignore_list[-1:])
+                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_rpn = multi_apply(self.loss_single, all_cls_scores[-1:], all_visible_scores[-1:], all_reid_scores[-1:], all_idx_scores[-1:], all_bbox_preds[-1:], all_seg_preds[-1:], all_self_attn_maps[-1:], all_cross_attn_maps[-1:], all_gt_bboxes_list[-1:], all_gt_labels_list[-1:], all_gt_visibles_list[-1:], all_gt_idx_list[-1:], all_gt_proj_cxcy_list[-1:], all_gt_seg_list[-1:], all_gt_bboxes_ignore_list[-1:])
             else : 
-                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg = multi_apply(self.loss_single, all_cls_scores, all_visible_scores, all_reid_scores, all_idx_scores, all_bbox_preds, all_seg_preds, all_gt_bboxes_list, all_gt_labels_list, all_gt_visibles_list, all_gt_idx_list, all_gt_proj_cxcy_list, all_gt_seg_list, all_gt_bboxes_ignore_list)
+                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_rpn = multi_apply(self.loss_single, all_cls_scores, all_visible_scores, all_reid_scores, all_idx_scores, all_bbox_preds, all_seg_preds, all_self_attn_maps, all_cross_attn_maps, all_gt_bboxes_list, all_gt_labels_list, all_gt_visibles_list, all_gt_idx_list, all_gt_proj_cxcy_list, all_gt_seg_list, all_gt_bboxes_ignore_list)
 
             # loss of proposal generated from encode feature map.
             if enc_cls_scores is not None:
@@ -1100,6 +1180,10 @@ class TMVReidHead(TMVDetHead):
                 loss_dict['loss_reid'] = losses_reid[-1]
                 loss_dict['loss_idx'] = losses_idx[-1]
                 #loss_dict['loss_bbox'] = losses_bbox[-1]
+                if losses_self_attn_map[0] is not None:
+                    loss_dict['loss_self_attn_map'] = losses_self_attn_map[-1]
+                if losses_rpn[0] is not None:
+                    loss_dict['loss_rpn'] = losses_rpn[-1]
 
                 # loss from other decoder layers
                 num_dec_layer = 0
@@ -1110,6 +1194,11 @@ class TMVReidHead(TMVDetHead):
                     loss_dict[f'd{num_dec_layer}.loss_reid'] = loss_reid_i
                     loss_dict[f'd{num_dec_layer}.loss_idx'] = loss_idx_i
                     #loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
+                    if losses_self_attn_map[0] is not None:
+                        loss_dict[f'd{num_dec_layer}.loss_self_attn_map'] = losses_self_attn_map[num_dec_layer]
+                    if losses_rpn[0] is not None:
+                        loss_dict[f'd{num_dec_layer}.loss_rpn'] = losses_rpn[num_dec_layer]
+
                     num_dec_layer += 1
 
             if losses_seg[0] is not None:
@@ -1180,7 +1269,8 @@ class TMVReidHead(TMVDetHead):
         init_det_points = init_det_points * divider + subtract
 
         #init_det_points[:,:,:7] = init_det_points.new_tensor([[ 0.29542732, -0.03341508, -0.00442334], [ 0.09282182,  0.16310196,  0.08339175], [ 0.20363398,  0.16747573,  0.02623144], [-0.05534008,  0.14034814,  0.01114271], [ 0.13638118, -0.04308339, -0.02122111], [-0.09600962,  0.00557075,  0.04734374], [-0.03392284, -0.11034748,  0.05279527]])
-
+        #init_det_points[:,:,:7] = init_det_points.new_tensor([[ 0.27392562, -0.04888831,  0.0105642 ], [0.0932953,  0.15739943, 0.08923323], [0.21008176, 0.17464549, 0.02624734], [-0.05751319,  0.14031571,  0.01481304], [ 0.12792144, -0.04409792,  0.01773776], [-0.09492707,  0.01197538,  0.01783613], [-0.03834701, -0.10455442,  0.04467643]]) #train
+        #init_det_points[:,:,:7] = init_det_points.new_tensor( [[0.20379515, 0.00682123, 0.00501024], [ 0.04603187, -0.02327396, -0.0108632 ], [ 0.00829679,  0.14213944, -0.02195654], [-0.2072762,  -0.12281641, -0.01924044], [-0.02206947, -0.12914291,  0.08791804], [-0.18385969,  0.02273205,  0.04043268], [-0.30653795,  0.07310766, -0.02218898]]) #test
         # (B, N, M, 3)
         init_det_points_mtv = init_det_points.repeat(1, N, 1, 1)
         init_det_points_mtv = init_det_points_mtv - extrinsics[:, :, None, :3, 3]
@@ -1196,14 +1286,14 @@ class TMVReidHead(TMVDetHead):
         imgH, imgW, _, _ = img_metas[0]['ori_shape']
         # add identity pose to ego queries and make V copies of queries with viewing poses as mtv queries
         B = init_det_points.shape[0] #1
-        identity_quat = init_det_points.new_zeros(B, 1, self.num_query, 4) #(1, 1, 900, 4)
-        identity_quat[..., 0] = 1 
+        #identity_quat = init_det_points.new_zeros(B, 1, self.num_query, 4) #(1, 1, 900, 4)
+        #identity_quat[..., 0] = 1 
         # (B, 1, M, 10)
         #init_det_points = torch.cat([init_det_points, identity_quat, torch.zeros_like(init_det_points)], dim=-1)
-        init_det_points = torch.cat([init_det_points, identity_quat, torch.zeros_like(init_det_points), torch.zeros_like(identity_quat)], dim=-1) #(1, 1, 900, 14)
+        #init_det_points = torch.cat([init_det_points, identity_quat, torch.zeros_like(init_det_points), torch.zeros_like(identity_quat)], dim=-1) #(1, 1, 900, 14)
 
         if init_det_points_mtv is None:
-            return init_det_points, None
+            return None, None
 
         dec_extrinsics = init_det_points.new_tensor([img_meta['dec_extrinsics'] for img_meta in img_metas])
         dec_quat = tfms.matrix_to_quaternion(dec_extrinsics[..., :3, :3].transpose(-1, -2))
@@ -1212,18 +1302,22 @@ class TMVReidHead(TMVDetHead):
         dec_pose = torch.cat([dec_quat, dec_tvec], dim=-1).unsqueeze(2).repeat(1, 1, self.num_query, 1) #(1, 3, 900, 7)
 
         intrinsics = init_det_points.new_tensor([img_meta['intrinsics'] for img_meta in img_metas]) #(1, 9, 4, 4)
-        intrinsics = intrinsics[:, :self.num_decode_views, :3, :3] #(1, 2, 3, 3)
-        fx = intrinsics[:, :, 0, 0] / imgW #(1, 2, 1)
+        intrinsics = intrinsics[:, :self.num_decode_views, :3, :3] #(1, 3, 3, 3)
+        fx = intrinsics[:, :, 0, 0] / imgW #(1, 3, 1)
         fy = intrinsics[:, :, 1, 1] / imgH 
         x0 = intrinsics[:, :, 0, 2] / imgW 
         y0 = intrinsics[:, :, 1, 2] / imgH 
-        intrinsics = torch.stack([fx, fy, x0, y0], dim=-1).unsqueeze(2).repeat(1, 1, self.num_query, 1) #(1, 2, 900, 4)
+        intrinsics = torch.stack([fx, fy, x0, y0], dim=-1).unsqueeze(2).repeat(1, 1, self.num_query, 1) #(1, 3, 900, 4)
 
         # (B, V, M, 10)
         #init_det_points_mtv = torch.cat([init_det_points_mtv, dec_pose], dim=-1)
-        init_det_points_mtv = torch.cat([init_det_points_mtv, dec_pose, intrinsics], dim=-1) #(1, 2, 900, 13) 
+        if self.query_pos3d_emb :
+            init_det_points_repeated = init_det_points.repeat(1, self.num_decode_views, 1, 1) #(1, 3, 900, 3)
+            init_det_points_mtv = torch.cat([init_det_points_repeated, init_det_points_mtv, dec_pose, intrinsics], dim=-1) #(1, 3, 900, 16=3+2+7+4) 
+        else : 
+            init_det_points_mtv = torch.cat([init_det_points_mtv, dec_pose, intrinsics], dim=-1) #(1, 3, 900, 13=2+7+4) 
 
-        return init_det_points, init_det_points_mtv
+        return None, init_det_points_mtv
 
     def generate_rays(self, pred_feats, pred_box, img_metas):
         B, N, _, H, W = pred_feats.shape #(1,3, 300, 1)
@@ -1286,7 +1380,7 @@ class TMVReidHead(TMVDetHead):
         x0 = intrinsics[:, :, 0, 2] / imgW 
         y0 = intrinsics[:, :, 1, 2] / imgH 
         intrinsics = torch.stack([fx, fy, x0, y0], dim=-1).unsqueeze(2).unsqueeze(3).repeat(1, 1, H, W, 1) #(1, 3, 300, 1, 4)
-        ctrs = torch.cat([ctrs, intrinsics], dim=-1) #(1, 3, 300, 1, 11)
+        ctrs = torch.cat([ctrs, intrinsics], dim=-1) #(1, 3, 300, 1, 11=7+4)
 
         pred_box_norm = deepcopy(pred_box)
         pred_box_norm[..., [0,2]] /= imgW # cx w

@@ -33,7 +33,7 @@ class DataLoader:
                 if is_valid >= self.visible_thresh :
                     cx, cy, w, h = all_bboxes[sample_idx][cam_idx]
                     x1, y1, x2, y2 = (cx - w/2), (cy - h/2), (cx + w/2), (cy + h/2)
-                    info = {'class':cls, 'x1':x1, 'y1':y1, 'x2':x2, 'y2':y2, 'prob':score, 'is_valid':is_valid, 'inst_idx':sample_idx+1}
+                    info = {'class':cls, 'x1':x1, 'y1':y1, 'x2':x2, 'y2':y2, 'reid_prob':reid_score, 'prob':score, 'is_valid':is_valid, 'inst_idx':sample_idx+1}
                     data[cam_idx].append(info)
         return data 
 

@@ -213,18 +213,22 @@ class LoadMultiViewGTFeatFromFiles(object):
         color_type (str): Color type of the file. Defaults to 'unchanged'.
     """
 
-    def __init__(self, num_input, num_views, feat_size, model, shuffle=True):
+    def __init__(self, num_input, num_views, feat_size, model, shuffle=True, empty_emb_is_one=False):
         self.num_input = num_input
         self.num_views = num_views
         self.feat_size = feat_size
         self.model = model
         self.shuffle = shuffle
+        self.empty_emb_is_one = empty_emb_is_one
 
     def __call__(self, results):
         pickle_path = results['pickle_path']
 
         pred_box = np.zeros((self.num_input, self.num_views, 4)) #(num_sample, 9, 4)
-        pred_box_emb = np.zeros((self.num_input, self.num_views, self.feat_size)) #(num_sample, 9, 1024)
+        if self.empty_emb_is_one :
+            pred_box_emb = np.ones((self.num_input, self.num_views, self.feat_size)) #(num_sample, 9, 1024)
+        else :
+            pred_box_emb = np.zeros((self.num_input, self.num_views, self.feat_size)) #(num_sample, 9, 1024)
         pred_box_prob = np.zeros((self.num_input, self.num_views)) #(num_sample, 9)
 
         with open(pickle_path, 'rb') as f:
@@ -234,8 +238,8 @@ class LoadMultiViewGTFeatFromFiles(object):
             box, app_feat, sur_feat = data #(num_sample, 9, 4), (num_sample, 9, 512), (num_sample, 9, 512)
             num_sample, _, app_feat_size = app_feat.shape
            
+            pred_box_idx = results['pred_box_idx_org'].astype('int') #(num_gt, 9)
             if self.shuffle:
-                pred_box_idx = results['pred_box_idx'].astype('int') #(num_gt, 9)
                 is_valid = (pred_box_idx != -1)
                 num_gt = len(pred_box_idx) #num_gt
 
@@ -245,19 +249,18 @@ class LoadMultiViewGTFeatFromFiles(object):
                 old2new_dict = np.array([np.random.choice(range(self.num_input), self.num_input, replace=False) for _ in range(self.num_views)]).transpose() #(num_sample, num_views)
                 new_idx = old2new_dict[old_idx] #(num_gt * 9)
                 new_pred_box_idx = new_idx.reshape(num_gt, self.num_views) #(num_gt, self.num_views)
-                results['pred_box_idx'][is_valid] = new_pred_box_idx[is_valid]
+                pred_box_idx[is_valid] = new_pred_box_idx[is_valid]
                 
                 dst_idx = (new_pred_box_idx.flatten(), view_idx.flatten())
                 pred_box[dst_idx] = box[old_idx]
-                pred_box_emb[dst_idx] = np.concatenate([app_feat[old_idx], sur_feat[old_idx]], -1)
+                pred_box_emb[dst_idx] = np.concatenate([app_feat[old_idx], sur_feat[old_idx]], -1)[..., :self.feat_size]
                 pred_box_prob[dst_idx] = 1.
             else :
                 pred_box[:num_sample] = box
-                pred_box_emb[:num_sample, :, :app_feat_size] = app_feat
-                pred_box_emb[:num_sample, :, app_feat_size:] = sur_feat
+                pred_box_emb[:num_sample] = np.concatenate([app_feat, sur_feat], -1)[..., :self.feat_size]
                 pred_box_prob[:num_sample] = 1.
      
-        results['pickle_path'] = pickle_path
+        results['pred_box_idx'] = pred_box_idx
         results['rpn_x1y1x2y2'] = pred_box.astype(np.float32) #(100,9,4) x1y1x2y2
         results['rpn_cxcywh'] = x1y1x2y22cxcywh(results['rpn_x1y1x2y2']) #(100,9,4) cxcywh
         results['rpn_emb'] = pred_box_emb.astype(np.float32) #(100,9,128)

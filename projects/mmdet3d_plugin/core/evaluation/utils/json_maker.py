@@ -77,7 +77,10 @@ class json_maker :
         self.json['scenes'][scene]['cameras'][cam]['instances'][inst]['emb_dist'] = emb_dist
 
     def insert_is_valid(self, scene, cam, inst, is_valid) :
-        self.json['scenes'][scene]['cameras'][cam]['instances'][inst]['is_valid'] = int(is_valid)
+        self.json['scenes'][scene]['cameras'][cam]['instances'][inst]['is_valid'] = is_valid
+
+    def insert_reid_prob(self, scene, cam, inst, reid_prob) :
+        self.json['scenes'][scene]['cameras'][cam]['instances'][inst]['reid_prob'] = reid_prob
 
     def insert_gt_id(self, scene, cam, inst, gt_id) :
         self.json['scenes'][scene]['cameras'][cam]['instances'][inst]['gt_id'] = gt_id

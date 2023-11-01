@@ -52,7 +52,16 @@ def show_result_mtv2d(data_root,
         img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, show_gt, show_pred, show_query, cam_query)
         img_list.append(img)
 
-    img = np.concatenate(img_list, axis=0)
+    if len(img_list) == 9 :
+        height, width, channels = img.shape
+        combined_image = np.zeros((3 * height, 3 * width, channels), dtype=np.uint8)
+        for i in range(3):
+            for j in range(3):
+                img_index = i * 3 + j
+                combined_image[i * height:(i + 1) * height, j * width:(j + 1) * width, :] = img_list[img_index]
+        img = combined_image
+    else : 
+        img = np.concatenate(img_list, axis=0) 
 
     result_path = osp.join(out_dir, '%s%s.jpg'%(scene_id, tail))
     mmcv.imwrite(img, result_path)
@@ -102,6 +111,6 @@ def imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det
             for query in cam_query:
                 query = query.astype('int')
                 color = (0, 0, 255)  # Red color for detected
-                cv2.circle(img_with_bboxes, query, 5, color, -1)  # Draw a filled red circle (dot)
+                cv2.circle(img_with_bboxes, query, 10, color, -1)  # Draw a filled red circle (dot)
 
     return img_with_bboxes

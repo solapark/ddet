@@ -2,6 +2,8 @@
 import argparse
 import mmcv
 import os
+import sys
+sys.path.insert(0, '/home/sapark/VEDet')
 import torch
 import warnings
 from mmcv import Config, DictAction

@@ -39,7 +39,7 @@ img_norm_cfg = dict(mean=[103.530, 116.280, 123.675], std=[57.375, 57.120, 58.39
 class_names = ['water1', 'water2', 'pepsi', 'coca1', 'coca2', 'coca3', 'coca4', 'tea1', 'tea2', 'yogurt', 'ramen1', 'ramen2', 'ramen3', 'ramen4', 'ramen5', 'ramen6', 'ramen7', 'juice1', 'juice2', 'can1', 'can2', 'can3', 'can4', 'can5', 'can6', 'can7', 'can8', 'can9', 'ham1', 'ham2', 'pack1', 'pack2', 'pack3', 'pack4', 'pack5', 'pack6', 'snack1', 'snack2', 'snack3', 'snack4', 'snack5', 'snack6', 'snack7', 'snack8', 'snack9', 'snack10', 'snack11', 'snack12', 'snack13', 'snack14', 'snack15', 'snack16', 'snack17', 'snack18', 'snack19', 'snack20', 'snack21', 'snack22', 'snack23', 'snack24', 'green_apple', 'red_apple', 'tangerine', 'lime', 'lemon', 'yellow_quince', 'green_quince', 'white_quince', 'fruit1', 'fruit2', 'peach', 'banana', 'fruit3', 'pineapple', 'fruit4', 'strawberry', 'cherry', 'red_pimento', 'green_pimento', 'carrot', 'cabbage1', 'cabbage2', 'eggplant', 'bread', 'baguette', 'sandwich', 'hamburger', 'hotdog', 'donuts', 'cake', 'onion', 'marshmallow', 'mooncake', 'shirimpsushi', 'sushi1', 'sushi2', 'big_spoon', 'small_spoon', 'fork', 'knife', 'big_plate', 'small_plate', 'bowl', 'white_ricebowl', 'blue_ricebowl', 'black_ricebowl', 'green_ricebowl', 'black_mug', 'gray_mug', 'pink_mug', 'green_mug', 'blue_mug', 'blue_cup', 'orange_cup', 'yellow_cup', 'big_wineglass', 'small_wineglass', 'glass1', 'glass2', 'glass3']
 
 #input_modality = dict(use_lidar=False, use_camera=True, use_radar=False, use_map=False, use_external=False)
-save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/17'
+save_dir = '/data3/sap/VEDet/result/tmvreid_messytable_rpn/25'
 bands, max_freq = 64, 8
 num_views = 3
 num_classes = len(class_names)
@@ -80,6 +80,8 @@ model = dict(
     gt_depth_sup=False,  # use cache to supervise
     pts_bbox_head=dict(
         type='TMVReidHead',
+        include_attn_map=True,
+        #share_view_cls=True,
         emb_intrinsics=True,
         pred_size=pred_size,
         num_input=300,
@@ -96,17 +98,18 @@ model = dict(
         num_decode_views=num_views,
         with_time=False,
         det_transformer=dict(
-            #type='VETransformer',
             type='TMvReidTransformer',
             det_decoder=dict(
-                type='PETRTransformerDecoder',
+                type='TMVReidTransformerDecoder',
                 return_intermediate=True,
                 num_layers=6,
                 transformerlayers=dict(
-                    type='PETRTransformerDecoderLayer',
+                    type='TMVReidTransformerDecoderLayer',
                     attn_cfgs=[
-                        dict(type='MultiheadAttention', embed_dims=256, num_heads=8, dropout=0.1),
-                        dict(type='PETRMultiheadAttention', embed_dims=256, num_heads=8, dropout=0.1),
+                        dict(type='TMVReidMultiheadSelfAttention', embed_dims=256, num_heads=8, dropout=0.1),
+                        dict(type='TMVReidMultiheadCrossAttention', embed_dims=256, num_heads=8, dropout=0.1,
+                            attention=dict(type='MultiheadSuperAttention')
+                        ),
                     ],
                     feedforward_channels=2048,
                     ffn_dropout=0.1,
@@ -254,6 +257,7 @@ data = dict(
         #ann_file=data_root + 'mmdet3d_nuscenes_30f_infos_val.pkl',
         #ann_file=data_root + 'messytable_infos_test.pkl',
         #ann_file=data_root + 'messytable_infos_train.pkl',
+        #ann_file=data_root + 'messytable_infos_test.pkl',
         ann_file=data_root + 'messytable_infos_test.pkl',
         #ann_file=data_root + 'messytable_infos_debug.pkl',
         classes=class_names,
@@ -281,12 +285,12 @@ lr_config = dict(
 )
 total_epochs = 200
 evaluation = dict(interval=10, pipeline=test_pipeline, metric=['bbox'], show=False, eval_thresh=.1, visible_thresh=.5, reid_thresh=.1, save_dir=save_dir, img_root='/data1/sap/MessyTable/images/')
-save_reid_pickle = dict(visible_thresh=.5, out_dir='/data3/sap/frcnn_keras_original/pickle/messytable/tmvreid_messytable_rpn17/reid_output/test')
+save_reid_pickle = dict(visible_thresh=.5, out_dir='/data3/sap/frcnn_keras_original/pickle/messytable/tmvreid_messytable_rpn23/reid_output/test')
 #checkpoint_config = dict(interval=24)
 checkpoint_config = dict(interval=10)
 find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
-load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
-#load_from = 'work_dirs/tmvreid_messytable_rpn11/epoch_200.pth'
+#load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
+load_from = 'work_dirs/tmvreid_messytable_rpn17/epoch_200.pth'
 resume_from = None

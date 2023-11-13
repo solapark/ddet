@@ -60,6 +60,8 @@ class TMVReidHead(TMVDetHead):
 
     def __init__(self,
                  in_channels,
+                 all_view_cls_train=False,
+                 share_view_cls=False,
                  include_attn_map=False,
                  query_pos3d_emb=False,
                  tp_train_only=False,
@@ -98,6 +100,7 @@ class TMVReidHead(TMVDetHead):
                  loss_iou=None,
                  loss_seg=None,
                  loss_self_attn_map=None,
+                 loss_cross_attn_map=None,
                  train_cfg=dict(
                      assigner=dict(
                          type='HungarianAssigner',
@@ -130,6 +133,8 @@ class TMVReidHead(TMVDetHead):
         self.gt_only = gt_only
         self.query_pos3d_emb = query_pos3d_emb
         self.include_attn_map = include_attn_map
+        self.share_view_cls = share_view_cls
+        self.all_view_cls_train = all_view_cls_train
 
         if 'code_size' in kwargs:
             self.code_size = kwargs['code_size']
@@ -201,6 +206,7 @@ class TMVReidHead(TMVDetHead):
         self.loss_rpn = build_loss(loss_rpn) if loss_rpn else None
         self.loss_visible = build_loss(loss_visible) if loss_visible else None
         self.loss_self_attn_map = build_loss(loss_self_attn_map) if loss_self_attn_map else None
+        self.loss_cross_attn_map = build_loss(loss_cross_attn_map) if loss_cross_attn_map else None
 
         if self.loss_cls is not None and self.loss_cls.use_sigmoid:
             self.cls_out_channels = num_classes
@@ -277,8 +283,8 @@ class TMVReidHead(TMVDetHead):
             # classification branch
             cls_branch = []
             for lyr, (in_channel, out_channel) in enumerate(
-                    zip([self.output_det_2d_encoding.embed_dim] + cls_hidden_dims,
-                        cls_hidden_dims + [self.cls_out_channels])):
+                    zip([self.output_det_2d_encoding.embed_dim] + cls_hidden_dims, #[256]  
+                        cls_hidden_dims + [self.cls_out_channels])): #[120]
                 cls_branch.append(nn.Linear(in_channel, out_channel))
                 if lyr < len(cls_hidden_dims):
                     cls_branch.append(nn.LayerNorm(out_channel))
@@ -449,11 +455,17 @@ class TMVReidHead(TMVDetHead):
             # detection from queries
             #if len(det_outputs) > 0 and len(regs) > 0:
             if len(det_outputs) > 0 :
-                cls_scores = torch.stack(
-                    [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 120)
-                if cls_scores.dim() == 5:
-                    #visible_scores = cls_scores[:, :, 1:, :, 0].transpose(2, 3) #(6, 1, 900, 3=num_views)
+                if self.share_view_cls :
+                    cls_scores = torch.stack(
+                        [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs.mean(2, keepdim=True))], dim=0) #(6, 1, 1, 900, 120)
+                else :
+                    cls_scores = torch.stack(
+                        [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 120)
+                #if cls_scores.dim() == 5:
+                if is_test:
                     cls_scores = cls_scores[:, :, 0] #(6, 1, 900, 120)
+                else :
+                    cls_scores = cls_scores.transpose(2,3) #(6, 1, 900, 3, 120)
 
                 visible_scores = torch.stack(
                     [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
@@ -499,7 +511,7 @@ class TMVReidHead(TMVDetHead):
                 seg_scores = torch.stack([self.seg_branch(output) for output in seg_outputs], dim=0)
 
         outs = {
-            'all_cls_scores': cls_scores, #(6, 1, 900, 120)
+            'all_cls_scores': cls_scores, #(6, 1, 900, 120) or #(6, 1, 900, 3, 120)
             'all_visible_scores': visible_scores, #(6, 1, 900, 3)
             'all_reid_scores': reid_scores, #(6, 1, 900)
             'all_idx_scores': idx_scores, #(6, 1, 900, 3, 300)
@@ -579,6 +591,8 @@ class TMVReidHead(TMVDetHead):
         bbox_targets = gt_idx.new_zeros((num_bboxes, self.num_decode_views, 4), dtype=torch.float32) #(1, 3, 300, 1)
         bbox_targets[pos_inds] = get_box_form_pred_idx(self.pred_box[0], gt_idx[sampling_result.pos_assigned_gt_inds], self.num_decode_views)
         bbox_weights = torch.zeros_like(bbox_targets)
+        #self.assigned_gt_idx = gt_idx.new_full((900,), -1)
+        #self.assigned_gt_idx[pos_inds] = sampling_result.pos_assigned_gt_inds
 
         rpn_assign_result = None
         if self.rpn_assigner is not None :
@@ -612,6 +626,8 @@ class TMVReidHead(TMVDetHead):
 
                 # bbox targets for debugging
                 bbox_targets[pos_inds2] = get_box_form_pred_idx(self.pred_box[0], idx_targets[pos_inds2], self.num_decode_views)
+
+                #self.assigned_gt_idx[pos_inds2] = sampling_result2.pos_assigned_gt_inds
 
         return (labels, label_weights, visible_targets, visible_weights, reid_targets, reid_weights, idx_targets, idx_weights, bbox_targets, bbox_weights, rpn_assign_result, pos_inds, neg_inds)
 
@@ -693,7 +709,7 @@ class TMVReidHead(TMVDetHead):
             dict[str, Tensor]: A dictionary of loss components for outputs from
                 a single decoder layer.
         """
-        loss_cls, loss_visible, loss_bbox, loss_seg, loss_self_attn_map, loss_rpn = None, None, None, None, None, None
+        loss_cls, loss_visible, loss_bbox, loss_seg, loss_self_attn_map, loss_cross_attn_map, loss_rpn = None, None, None, None, None, None, None
         if cls_scores is not None:
             num_imgs = cls_scores.size(0) #1
             cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
@@ -715,16 +731,27 @@ class TMVReidHead(TMVDetHead):
             bbox_targets = torch.cat(bbox_targets_list, 0)
             bbox_weights = torch.cat(bbox_weights_list, 0)
 
-            # classification loss
-            cls_scores = cls_scores.reshape(-1, self.cls_out_channels) #(900, 120)
-            # construct weighted avg_factor to match with the official DETR repo
-            cls_avg_factor = num_total_pos * 1.0 + \
-                num_total_neg * self.bg_cls_weight
-            if self.sync_cls_avg_factor:
-                cls_avg_factor = reduce_mean(cls_scores.new_tensor([cls_avg_factor]))
+            # classification loss cls_scores #(1, 900, 3, 120)
+            if self.all_view_cls_train :
+                cls_scores = cls_scores.transpose(1, 2).reshape(-1, self.cls_out_channels) #(900*3, 120)
+                # construct weighted avg_factor to match with the official DETR repo
+                cls_avg_factor = num_total_pos * 1.0 + \
+                    num_total_neg * self.bg_cls_weight
+                if self.sync_cls_avg_factor:
+                    cls_avg_factor = reduce_mean(cls_scores.new_tensor([cls_avg_factor]))
 
-            cls_avg_factor = max(cls_avg_factor, 1)
-            loss_cls = self.loss_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
+                cls_avg_factor = max(cls_avg_factor, 1)
+                loss_cls = self.loss_cls(cls_scores, labels.repeat(self.num_decode_views), label_weights.repeat(self.num_decode_views), avg_factor=cls_avg_factor*self.num_decode_views)
+            else :
+                cls_scores = cls_scores[:,:,0].reshape(-1, self.cls_out_channels) #(900, 120)
+                # construct weighted avg_factor to match with the official DETR repo
+                cls_avg_factor = num_total_pos * 1.0 + \
+                    num_total_neg * self.bg_cls_weight
+                if self.sync_cls_avg_factor:
+                    cls_avg_factor = reduce_mean(cls_scores.new_tensor([cls_avg_factor]))
+
+                cls_avg_factor = max(cls_avg_factor, 1)
+                loss_cls = self.loss_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
 
             # visible loss
             visible_scores = visible_scores.reshape(-1, self.num_decode_views) #(900, 3)
@@ -765,6 +792,18 @@ class TMVReidHead(TMVDetHead):
                 loss_self_attn_map = self.loss_self_attn_map(self_attn_maps.reshape(-1, 1), self_attn_maps_targets.reshape(-1, ), self.self_attn_maps_weights, avg_factor=self.self_attn_maps_avg_factor)
                 loss_self_attn_map = torch.nan_to_num(loss_self_attn_map)
 
+            # cross attn loss
+            if self.loss_cross_attn_map is not None:
+                target_idx = torch.where(labels!=120)[0] #(7,)
+                cross_attn_map = cross_attn_maps[0].reshape(3, 900, 3, 300).transpose(1, 0) #(900, 3, 3, 300) #(query_idx, view_of_query, view_of_rpn, rpn)
+                cross_attn_map_target = cross_attn_map[target_idx]  #(N, 3, 3, 300)
+                loss_cross_attn_map = 0
+                for i in range(self.num_decode_views) :
+                    for j in range(self.num_decode_views-1) : 
+                        loss_cross_attn_map += torch.abs(cross_attn_map_target[:, j, i] - cross_attn_map_target[:, j+1, i]).mean()
+                loss_cross_attn_map = .1 * loss_cross_attn_map/(self.num_decode_views*(self.num_decode_views-1))
+                loss_cross_attn_map = torch.nan_to_num(loss_cross_attn_map)
+
             # Compute the average number of gt boxes accross all gpus, for
             # normalization purposes
             num_total_pos = loss_cls.new_tensor([num_total_pos])
@@ -797,6 +836,13 @@ class TMVReidHead(TMVDetHead):
                 pred_cls_scores, pred_labels = F.softmax(cls_scores, dim=-1)[..., :-1].max(-1)
                 preds_query = self.query2d_denorm.transpose(2,1)[0] #(900, 3, 2)
 
+                if self.loss_cross_attn_map is not None :
+                    #cross_attn_map (1, 2700, 900)
+                    cross_attn_map = cross_attn_maps[0].reshape(3, 900, 3, 300).transpose(1, 0) #(900, 3, 3, 300)
+                    #cross_attn_map = cross_attn_maps[0].reshape(900, 3, 300, 3).transpose(-1, -2) #(900, 3, 3, 300)
+                    cross_attn_map_sig = cross_attn_map.sigmoid() #(900, 3, 3, 300)
+                    cross_attn_map_scores, cross_attn_map_pred_idx = cross_attn_map_sig.max(-1) #(900, 3, 3), (900, 3, 3)
+
                 target_idx = torch.where(labels!=120)[0] #(7,)
 
                 gt_labels = labels[target_idx]
@@ -826,6 +872,22 @@ class TMVReidHead(TMVDetHead):
                     cur_save_dir = os.path.join(save_dir, save_name)
                     cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores, cam_preds_query = result_from_idx(draw_idx)
                     cam_is_valids[:] = 1
+
+                    if self.loss_cross_attn_map is not None :
+                        gt_idx = idx.reshape(self.num_query, self.num_decode_views) #(900, 3)
+                        for i, (g, pr, at, at_sig, c) in enumerate(zip(gt_idx[target_idx].cpu().numpy(), pred_idx[target_idx].cpu().numpy(), cross_attn_map_pred_idx[target_idx].cpu().numpy(), cross_attn_map_sig[target_idx].cpu().detach().numpy(), cam_det_cls)) :
+                            print('i', i, 'gt_idx', g, 'pred_idx', pr, 'cross_attn', np.diag(at), 'cls', c)
+                            for j in range(self.num_decode_views):
+                                for k in range(self.num_decode_views):
+                                    print('i', i, 'gt_idx', g, 'pred_idx', pr, 'cross_attn', np.diag(at), 'cls', c)
+                                    print('cross_attn_map_sig diag view ', j, ' to ', k, ' attention ', at[j, k], ' : ', at_sig[j, k, at[j, k]])
+                                    for l, content in enumerate(at_sig[j, k]):
+                                        print(l, ' : ',  content, ', ')
+                            print()
+                            
+                    #for (g, q, c) in zip(self.assigned_gt_idx[target_idx].cpu().numpy(), target_idx, cam_det_cls) :
+                    #    print('gt', g, 'query', q, 'cls', c)
+
                     result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores, cam_preds_query)
                     show_result_mtv2d(data_root, cur_save_dir, result, 0, show_query=True) 
 
@@ -873,174 +935,6 @@ class TMVReidHead(TMVDetHead):
                     result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores)
                     show_result_mtv2d(data_root, cur_save_dir, result, 0, show_pred=False, show_gt=True) 
 
-
-                '''
-                img_list = []
-                imgs = self.img_metas[0]['img'][0].permute(0, 2, 3, 1).cpu().numpy().astype(np.uint8)
-                is_draw_all_gt_all_target = True
-                if is_draw_all_gt_all_target : 
-                    for i in range(self.num_decode_views) :
-                        img = imgs[i]
-                        cam_gt_bboxes = gt_bbox[:, i] #(num_gt, 4) #(cx cy w h)
-                        cam_det_bboxes = show_bbox_preds[:, i] #(num_pred, 4) #(cx cy w h)
-
-                        img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, 1)
-                        img_list.append(img)
-                    img = np.concatenate(img_list, axis=0)
-
-                    result_path = os.path.join(cur_save_dir, '%s.jpg'%(scene_name))
-                    mmcv.imwrite(img, result_path)
-
-                    #draw_inst_by_inst
-                    for jj in range(len(gt_bbox)) :
-                        img_list = []
-                        for i in range(self.num_decode_views) :
-                            img = imgs[i]
-                            cam_gt_bboxes = gt_bbox[jj:jj+1, i] #(num_gt, 4) #(cx cy w h)
-                            cam_det_bboxes = show_bbox_preds[jj:jj+1, i] #(num_pred, 4) #(cx cy w h)
-
-                            img = img.cpu().numpy().astype(np.uint8)
-                            img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, 1)
-                            img_list.append(img)
-                        img = np.concatenate(img_list, axis=0)
-
-                        result_path = os.path.join(cur_save_dir, '%s_%02d.jpg'%(scene_name, jj))
-                        mmcv.imwrite(img, result_path)
-
-                reid_valid_idx = torch.where(reid_scores>-5)[0] #(num_pred, )
-
-                reid_valid_pred_labels = pred_labels[reid_valid_idx]
-                reid_valid_pred_idx = pred_idx[reid_valid_idx]
-
-                reid_valid_show_bbox_preds = get_box_form_pred_idx(self.pred_box[0], reid_valid_pred_idx, self.num_decode_views)
-
-                reid_valid_cam_det_cls = reid_valid_pred_labels.cpu().numpy().astype('str') #(num_pred,) #str
-                reid_valid_cam_det_score = cls_scores_sig[reid_valid_idx][(torch.arange(len(reid_valid_pred_labels)), reid_valid_pred_labels)] #(num_pred,) #float
-
-                is_draw_all_pred = False
-                if is_draw_all_pred : 
-                    all_bbox_preds = denormalize_bbox(bbox_preds, self.pc_range)[:, 9:]
-                    for jj in range(len(all_bbox_preds)) :
-                        img_list = []
-                        imgs = self.img_metas[0]['img'][0].permute(0, 2, 3, 1)
-                        for i in range(self.num_decode_views) :
-                            img = imgs[i]
-                            cam_gt_bboxes = gt_bbox[0:1, (i*9, i*9+1, i*9+3, i*9+5)] #(num_gt, 4) #(cx cy w h)
-                            cam_det_bboxes = all_bbox_preds[jj:jj+1, (i*9, i*9+1, i*9+3, i*9+5)] #(num_pred, 4) #(cx cy w h)
-
-                            cam_det_bboxes[:, 0] = cam_det_bboxes[:, 0] * input_img_w
-                            cam_det_bboxes[:, 1] = cam_det_bboxes[:, 1] * input_img_h
-                            cam_gt_bboxes[:, 0] = cam_gt_bboxes[:, 0] * input_img_w
-                            cam_gt_bboxes[:, 1] = cam_gt_bboxes[:, 1] * input_img_h
-
-                            img = img.cpu().numpy().astype(np.uint8)
-                            img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, 1)
-                            img_list.append(img)
-                        img = np.concatenate(img_list, axis=0)
-
-                        result_path = os.path.join(cur_save_dir, '%s_all_pred_%d.jpg'%(scene_name, jj))
-                        mmcv.imwrite(img, result_path)
-
-
-                is_draw_each_inst = False
-                if is_draw_each_inst : 
-                    pred_cls_scores, pred_labels = F.softmax(cls_scores, dim=-1)[..., :-1].max(-1)
-                    show_bbox_preds = denormalize_bbox(bbox_preds, self.pc_range)[:, 9:]
-                    for k in range(len(gt_labels)) :
-                        same_cls_idx =  (gt_labels[k] == pred_labels)
-                        cur_gt_bbox = gt_bbox[k:k+1]
-                        cur_show_bbox_preds = show_bbox_preds[same_cls_idx]
-
-                        cam_det_cls = pred_labels[same_cls_idx].cpu().numpy().astype('str') #(num_pred,) #str
-                        cam_det_score = cls_scores_sig[same_cls_idx][:, gt_labels[k]] #(num_pred,) #float
-
-                        cam_gt_cls = gt_labels[k:k+1].cpu().numpy().astype('str') #(num_gt, ) #str
-
-                        img_list = []
-                        imgs = self.img_metas[0]['img'][0].permute(0, 2, 3, 1)
-                        for i in range(self.num_decode_views) :
-                            img = imgs[i]
-                            cam_gt_bboxes = cur_gt_bbox[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_gt, 4) #(cx cy w h)
-
-                            cam_det_bboxes = cur_show_bbox_preds[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_pred, 4) #(cx cy w h)
-
-                            cam_det_bboxes[:, 0] = cam_det_bboxes[:, 0] * input_img_w
-                            cam_det_bboxes[:, 1] = cam_det_bboxes[:, 1] * input_img_h
-                            cam_gt_bboxes[:, 0] = cam_gt_bboxes[:, 0] * input_img_w
-                            cam_gt_bboxes[:, 1] = cam_gt_bboxes[:, 1] * input_img_h
-
-                            img = img.cpu().numpy().astype(np.uint8)
-                            img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes, cam_det_cls, cam_det_score, 1)
-                            img_list.append(img)
-                        img = np.concatenate(img_list, axis=0)
-
-                        result_path = os.path.join(cur_save_dir, '%s_cls_%d.jpg'%(scene_name, gt_labels[k].item()))
-                        mmcv.imwrite(img, result_path)
-
-                        for j in range(len(cur_show_bbox_preds)) :
-                            img_list = []
-                            imgs = self.img_metas[0]['img'][0].permute(0, 2, 3, 1)
-                            for i in range(self.num_decode_views) :
-                                img = imgs[i]
-                                cam_gt_bboxes = cur_gt_bbox[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_gt, 4) #(cx cy w h)
-
-                                cam_det_bboxes = cur_show_bbox_preds[:, (i*9, i*9+1, i*9+3, i*9+5)] #(num_pred, 4) #(cx cy w h)
-
-                                cam_det_bboxes[:, 0] = cam_det_bboxes[:, 0] * input_img_w
-                                cam_det_bboxes[:, 1] = cam_det_bboxes[:, 1] * input_img_h
-                                cam_gt_bboxes[:, 0] = cam_gt_bboxes[:, 0] * input_img_w
-                                cam_gt_bboxes[:, 1] = cam_gt_bboxes[:, 1] * input_img_h
-
-                                img = img.cpu().numpy().astype(np.uint8)
-                                img = imshow_gt_det_bboxes(img, cam_gt_bboxes, cam_gt_cls, cam_det_bboxes[j:j+1], cam_det_cls[j:j+1], cam_det_score[j:j+1], 1)
-                                img_list.append(img)
-                            img = np.concatenate(img_list, axis=0)
-
-                            result_path = os.path.join(cur_save_dir, '%s_cls_%d_%d.jpg'%(scene_name, gt_labels[k].item(), j))
-                            mmcv.imwrite(img, result_path)
-
-                is_calc_diff = False
-                if is_calc_diff :
-                    show_bbox_preds = bbox_preds[target_idx]
-                    show_bbox_preds = denormalize_bbox(show_bbox_preds, self.pc_range)[:, 9:]
-
-                    gt_labels = labels[target_idx]
-                    gt_bbox = bbox_targets[target_idx][:, 9:]
-
-                    norm_target = normalized_bbox_targets[target_idx]
-                    norm_pred = bbox_preds[target_idx]
-                    wgt = bbox_weights[target_idx]
-
-                    diff = norm_target - norm_pred
-                    wgted_diff = diff * wgt
-                    wgted_diff = wgted_diff[:, 10:]
-                    wgted_diff = wgted_diff[:, (0, 1, 2, 5, 10, 11, 12, 15, 20, 21, 22, 25)] #x,y,w,h
-                    wgted_diff = torch.reshape(wgted_diff, (-1, 3, 4))
-
-                    diff = diff[:, 10:]
-                    diff = diff[:, (0, 1, 2, 5, 10, 11, 12, 15, 20, 21, 22, 25)] #x,y,w,h
-                    diff = torch.reshape(diff, (-1, 3, 4))
-
-                    print_label = pred_labels[target_idx]
-                
-                    target_bbox_coord_idx = []
-                    for i in range(1, self.num_decode_views+1) :
-                        target_bbox_coord_idx.extend([i*10, i*10+1, i*10+2, i*10+5])
-
-                    print(wgted_diff)
-                    print(wgted_diff.abs().mean())
-
-                    #target_idx = torch.unique(torch.where(bbox_targets!=0)[0])
-                '''
-
-            '''
-            loss_bbox = self.loss_bbox(
-                bbox_preds[isnotnan],
-                normalized_bbox_targets[isnotnan],
-                bbox_weights[isnotnan],
-                avg_factor=num_total_pos)
-            '''
-
             loss_cls = torch.nan_to_num(loss_cls)
             loss_visible = torch.nan_to_num(loss_visible)
             loss_reid = torch.nan_to_num(loss_reid)
@@ -1056,11 +950,7 @@ class TMVReidHead(TMVDetHead):
             loss_seg = self.loss_seg(seg_preds, gt_seg_list[0])
             loss_seg = torch.nan_to_num(loss_seg)
 
-        if seg_preds is not None:
-            loss_seg = self.loss_seg(seg_preds, gt_seg_list[0])
-            loss_seg = torch.nan_to_num(loss_seg)
-
-        return loss_cls, loss_visible, loss_reid, loss_idx, loss_bbox, loss_seg, loss_self_attn_map, loss_rpn
+        return loss_cls, loss_visible, loss_reid, loss_idx, loss_bbox, loss_seg, loss_self_attn_map, loss_cross_attn_map, loss_rpn
 
     @force_fp32(apply_to=('preds_dicts'))
     def loss(
@@ -1160,9 +1050,9 @@ class TMVReidHead(TMVDetHead):
                 all_cross_attn_maps = [None] * num_dec_layers
 
             if self.debug : 
-                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_rpn = multi_apply(self.loss_single, all_cls_scores[-1:], all_visible_scores[-1:], all_reid_scores[-1:], all_idx_scores[-1:], all_bbox_preds[-1:], all_seg_preds[-1:], all_self_attn_maps[-1:], all_cross_attn_maps[-1:], all_gt_bboxes_list[-1:], all_gt_labels_list[-1:], all_gt_visibles_list[-1:], all_gt_idx_list[-1:], all_gt_proj_cxcy_list[-1:], all_gt_seg_list[-1:], all_gt_bboxes_ignore_list[-1:])
+                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_cross_attn_map, losses_rpn = multi_apply(self.loss_single, all_cls_scores[-1:], all_visible_scores[-1:], all_reid_scores[-1:], all_idx_scores[-1:], all_bbox_preds[-1:], all_seg_preds[-1:], all_self_attn_maps[-1:], all_cross_attn_maps[-1:], all_gt_bboxes_list[-1:], all_gt_labels_list[-1:], all_gt_visibles_list[-1:], all_gt_idx_list[-1:], all_gt_proj_cxcy_list[-1:], all_gt_seg_list[-1:], all_gt_bboxes_ignore_list[-1:])
             else : 
-                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_rpn = multi_apply(self.loss_single, all_cls_scores, all_visible_scores, all_reid_scores, all_idx_scores, all_bbox_preds, all_seg_preds, all_self_attn_maps, all_cross_attn_maps, all_gt_bboxes_list, all_gt_labels_list, all_gt_visibles_list, all_gt_idx_list, all_gt_proj_cxcy_list, all_gt_seg_list, all_gt_bboxes_ignore_list)
+                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_cross_attn_map, losses_rpn = multi_apply(self.loss_single, all_cls_scores, all_visible_scores, all_reid_scores, all_idx_scores, all_bbox_preds, all_seg_preds, all_self_attn_maps, all_cross_attn_maps, all_gt_bboxes_list, all_gt_labels_list, all_gt_visibles_list, all_gt_idx_list, all_gt_proj_cxcy_list, all_gt_seg_list, all_gt_bboxes_ignore_list)
 
             # loss of proposal generated from encode feature map.
             if enc_cls_scores is not None:
@@ -1182,6 +1072,8 @@ class TMVReidHead(TMVDetHead):
                 #loss_dict['loss_bbox'] = losses_bbox[-1]
                 if losses_self_attn_map[0] is not None:
                     loss_dict['loss_self_attn_map'] = losses_self_attn_map[-1]
+                if losses_cross_attn_map[0] is not None:
+                    loss_dict['loss_cross_attn_map'] = losses_cross_attn_map[-1]
                 if losses_rpn[0] is not None:
                     loss_dict['loss_rpn'] = losses_rpn[-1]
 
@@ -1196,6 +1088,8 @@ class TMVReidHead(TMVDetHead):
                     #loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
                     if losses_self_attn_map[0] is not None:
                         loss_dict[f'd{num_dec_layer}.loss_self_attn_map'] = losses_self_attn_map[num_dec_layer]
+                    if losses_cross_attn_map[0] is not None:
+                        loss_dict[f'd{num_dec_layer}.loss_cross_attn_map'] = losses_cross_attn_map[num_dec_layer]
                     if losses_rpn[0] is not None:
                         loss_dict[f'd{num_dec_layer}.loss_rpn'] = losses_rpn[num_dec_layer]
 

@@ -408,6 +408,25 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         results_dict = dict()
         return results_dict
 
+    def save_reid_pickle(self,
+                 results,
+                 visible_thresh,
+                 out_dir, 
+                 ):
+        result_files, tmp_dir = self.format_results(results, None)
+
+        from ..core.evaluation.save_reid_pickle import ReidPickleSaver
+        messytable_eval = ReidPickleSaver(
+            num_views = self.num_views,
+            det_path=result_files['pts_bbox'],
+            output_dir=out_dir,
+            visible_thresh=visible_thresh,
+            )
+        messytable_eval.main()
+
+        if tmp_dir is not None:
+            tmp_dir.cleanup()
+
     def _build_default_pipeline(self):
         """Build the default pipeline for this dataset."""
         pipeline = [

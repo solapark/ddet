@@ -33,3 +33,7 @@ CUDA_VISIBLE_DEVICES=1,2,3 tools/dist_train.sh projects/configs/tmvreid_messytab
 #test
 python tools/test.py projects/configs/tmvreid_messytable_rpn.py work_dirs/tmvreid_messytable_rpn/epoch_200.pth --eval bbox
 CUDA_VISIBLE_DEVICES=1,2,3 tools/dist_test.sh projects/configs/tmvreid_messytable_rpn.py work_dirs/tmvreid_messytable_rpn/epoch_200.pth 3 --eval bbox
+
+#save reid pickle
+python tools/test.py projects/configs/tmvreid_messytable_rpn17.py work_dirs/tmvreid_messytable_rpn17/epoch_200.pth --save_reid_pickle
+CUDA_VISIBLE_DEVICES=1,2,3 tools/dist_test.sh projects/configs/tmvreid_messytable_rpn17.py work_dirs/tmvreid_messytable_rpn17/epoch_200.pth 3  --save_reid_pickle

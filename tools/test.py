@@ -40,6 +40,7 @@ def parse_args():
         nargs='+',
         help='evaluation metrics, which depends on the dataset, e.g., "bbox",'
         ' "segm", "proposal" for COCO, and "mAP", "recall" for PASCAL VOC')
+    parser.add_argument( '--save_reid_pickle', action='store_true',)
     parser.add_argument('--show', action='store_true', help='show results')
     parser.add_argument(
         '--show-dir', help='directory where results will be saved')
@@ -103,7 +104,7 @@ def main():
     args = parse_args()
 
     assert args.out or args.eval or args.format_only or args.show \
-        or args.show_dir, \
+        or args.show_dir or args.save_reid_pickle, \
         ('Please specify at least one operation (save/eval/format/show the '
          'results / save the results) with the argument "--out", "--eval"'
          ', "--format-only", "--show" or "--show-dir"')
@@ -240,7 +241,9 @@ def main():
                 eval_kwargs.pop(key, None)
             eval_kwargs.update(dict(metric=args.eval, **kwargs))
             print(dataset.evaluate(outputs, **eval_kwargs))
-
+        if args.save_reid_pickle:
+            save_reid_pickle_kwargs = cfg.get('save_reid_pickle', {}).copy()
+            dataset.save_reid_pickle(outputs, **save_reid_pickle_kwargs)
 
 if __name__ == '__main__':
     torch.set_printoptions(sci_mode=False)

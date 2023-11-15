@@ -277,6 +277,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                          metric='bbox',
                          result_name='pts_bbox',
                          gt_path=None,
+                         reid_config_dir=None,
                          save_query=False):
         """Evaluation for a single model in nuScenes protocol.
 
@@ -304,7 +305,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             visible_thresh=visible_thresh,
             reid_thresh=reid_thresh,
             save_query=save_query,
-            gt_path=gt_path)
+            gt_path=gt_path, 
+            reid_config_dir=reid_config_dir)
             #verbose=False)
         all_ap_dict, cur_map, self.result_list = messytable_eval.main()
         messytable_eval.log_eval()
@@ -369,6 +371,7 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                  visible_thresh=0,
                  reid_thresh=0,
                  gt_path=None,
+                 reid_config_dir=None,
                  show_query=False):
         """Evaluation in nuScenes protocol.
 
@@ -395,9 +398,9 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         if isinstance(result_files, dict):
             for name in result_names:
                 print('Evaluating bboxes of {}'.format(name))
-                self._evaluate_single(result_files[name], eval_thresh, visible_thresh, reid_thresh, save_dir, img_root, save_query=show_query, gt_path=gt_path)
+                self._evaluate_single(result_files[name], eval_thresh, visible_thresh, reid_thresh, save_dir, img_root, save_query=show_query, gt_path=gt_path, reid_config_dir=reid_config_dir)
         elif isinstance(result_files, str):
-            self._evaluate_single(result_files, eval_thresh, visible_thresh, reid_thresh, save_dir, img_root, save_query=show_query, gt_path=gt_path)
+            self._evaluate_single(result_files, eval_thresh, visible_thresh, reid_thresh, save_dir, img_root, save_query=show_query, gt_path=gt_path, reid_config_dir=reid_config_dir)
 
         if show:
             self.show(img_root, save_dir, eval_thresh, pipeline=pipeline, show_gt=show_gt, visible_thresh=visible_thresh, show_query=show_query)

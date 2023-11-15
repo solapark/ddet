@@ -78,10 +78,13 @@ class CustomMessytableRpnDataset(CustomMessytableDataset):
         """
         info = self.data_infos[index]
         # standard protocal modified from SECOND.Pytorch
+        pickle_path=info['pickle_path']
+        if self.reid_input_pickle_dir is not None :
+            pickle_path = pickle_path.replace('/data3/sap/frcnn_keras_original/pickle/messytable', self.reid_input_pickle_dir)
         input_dict = dict(
             scene_id=info['scene_id'],
             scene_token=info['scene_token'],
-            pickle_path=info['pickle_path'],
+            pickle_path=pickle_path,
             cams=info['cams'],
             valid_flags=info['valid_flags'],
             gt_bboxes_3d=info['gt_ids'], 
@@ -104,7 +107,10 @@ class CustomMessytableRpnDataset(CustomMessytableDataset):
         extrinsics = []
         for i, (cam_type, cam_info) in enumerate(info['cams'].items()):
             if i == self.num_views : break
-            image_paths.append(cam_info['img_path'])
+            image_path = cam_info['img_path']
+            if self.img_root is not None :
+                image_path = image_path.replace('/data1/sap/MessyTable/images', self.img_root) 
+            image_paths.append(image_path)
             intrinsics.append(cam_info['intrinsic'])
             extrinsics.append(cam_info['extrinsic'])
             world2img_rts.append(cam_info['world2img'])

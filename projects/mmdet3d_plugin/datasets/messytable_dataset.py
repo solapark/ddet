@@ -65,6 +65,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
                  ann_file,
                  pipeline=None,
                  data_root=None,
+                 img_root=None,
+                 reid_input_pickle_dir=None,
                  classes=None,
                  num_views=None,
                  load_interval=1,
@@ -79,6 +81,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         self.use_valid_flag = use_valid_flag
         self.num_views = num_views
         self.timestamp = time.strftime('%Y%m%d_%H%M%S', time.localtime())
+        self.img_root = img_root
+        self.reid_input_pickle_dir = reid_input_pickle_dir
         super().__init__(
             data_root=data_root,
             ann_file=ann_file,
@@ -166,7 +170,10 @@ class CustomMessytableDataset(CustomMtv2DDataset):
         extrinsics = []
         for i, (cam_type, cam_info) in enumerate(info['cams'].items()):
             if i == self.num_views : break
-            image_paths.append(cam_info['img_path'])
+            image_path = cam_info['img_path']
+            if self.img_root is not None :
+                image_path = image_path.replace('/data1/sap/MessyTable/images', self.img_root) 
+            image_paths.append(image_path)
             intrinsics.append(cam_info['intrinsic'])
             extrinsics.append(cam_info['extrinsic'])
             world2img_rts.append(cam_info['world2img'])

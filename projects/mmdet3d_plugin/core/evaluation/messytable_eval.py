@@ -13,7 +13,7 @@ from .detection.map import Map_calculator
 from .reid.map import Reid_evaluator
 
 class MessytableEval:
-    def __init__(self, num_views, class_list, det_path, gt, output_dir, img_dir, min_overlap=.5, cls_thresh=0, visible_thresh=0, reid_thresh=0, save_query=False, gt_path=None):
+    def __init__(self, num_views, class_list, det_path, gt, output_dir, img_dir, min_overlap=.5, cls_thresh=0, visible_thresh=0, reid_thresh=0, save_query=False, gt_path=None, reid_config_dir=None):
         self.num_valid_cam = num_views
         self.save_query = save_query
 
@@ -30,7 +30,9 @@ class MessytableEval:
         self.json_save_path = os.path.join(output_dir, 'det.json')
         self.Json_saver = Json_saver(img_dir, self.json_save_path, num_views, gt_path)
 
-        #self.Reid_evaluator = Reid_evaluator(img_dir, self.json_save_path)
+        if reid_config_dir is not None : 
+            assert gt_path is not None
+            self.reid_evaluator = Reid_evaluator(self.json_save_path, gt_path, num_views, reid_config_dir)
 
     def main(self) :
         self.Log_manager.write_cur_time()
@@ -114,9 +116,12 @@ class MessytableEval:
                 log_manager.write_log('%s\t%.2f'%(cls, e))
             log_manager.write_log('\n')
         '''
+        reid_eval = self.reid_evaluator.main()
+        metric += reid_eval.keys() #AP, fpr, IPAA
+        mean_eval += reid_eval.values()
 
         metric_name = '\t'.join(metric)
-        metric_value = ['%.2f'%(m) for m in mean_eval]
+        metric_value = ['%.3f'%(m) for m in mean_eval]
         metric_value = '\t'.join(metric_value)
         self.Log_manager.write_log('metric\t%s'%(metric_name))
         self.Log_manager.write_log('ALL\t%s'%(metric_value))

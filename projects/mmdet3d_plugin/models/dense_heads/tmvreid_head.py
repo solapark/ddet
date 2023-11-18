@@ -62,6 +62,7 @@ class TMVReidHead(TMVDetHead):
                  in_channels,
                  all_view_cls_train=False,
                  share_view_cls=False,
+                 share_view_idx=False,
                  include_attn_map=False,
                  query_pos3d_emb=False,
                  tp_train_only=False,
@@ -135,6 +136,7 @@ class TMVReidHead(TMVDetHead):
         self.include_attn_map = include_attn_map
         self.share_view_cls = share_view_cls
         self.all_view_cls_train = all_view_cls_train
+        self.share_view_idx = share_view_idx
 
         if 'code_size' in kwargs:
             self.code_size = kwargs['code_size']
@@ -339,13 +341,24 @@ class TMVReidHead(TMVDetHead):
             self.reid_branch = nn.ModuleList([deepcopy(reid_branch) for _ in range(num_layers)])
 
         idx_branch = []
-        for lyr, (in_channel, out_channel) in enumerate(
-                zip([self.output_det_2d_encoding.embed_dim] + idx_hidden_dims,
-                    idx_hidden_dims + [self.idx_out_channels])):
-            idx_branch.append(nn.Linear(in_channel, out_channel))
-            if lyr < len(idx_hidden_dims):
-                idx_branch.append(nn.LayerNorm(out_channel))
-                idx_branch.append(nn.ReLU(inplace=True))
+        if self.share_view_idx :
+            for lyr, (in_channel, out_channel) in enumerate(
+                    zip([self.output_det_2d_encoding.embed_dim*self.num_decode_views] + idx_hidden_dims,
+                        idx_hidden_dims + [self.idx_out_channels*self.num_decode_views])):
+                idx_branch.append(nn.Linear(in_channel, out_channel))
+                if lyr < len(idx_hidden_dims):
+                    idx_branch.append(nn.LayerNorm(out_channel))
+                    idx_branch.append(nn.ReLU(inplace=True))
+
+        else  :
+            for lyr, (in_channel, out_channel) in enumerate(
+                    zip([self.output_det_2d_encoding.embed_dim] + idx_hidden_dims,
+                        idx_hidden_dims + [self.idx_out_channels])):
+                idx_branch.append(nn.Linear(in_channel, out_channel))
+                if lyr < len(idx_hidden_dims):
+                    idx_branch.append(nn.LayerNorm(out_channel))
+                    idx_branch.append(nn.ReLU(inplace=True))
+
         idx_branch = nn.Sequential(*idx_branch)
         if shared_head:
             self.idx_branch = nn.ModuleList([idx_branch for _ in range(num_layers)])
@@ -475,9 +488,18 @@ class TMVReidHead(TMVDetHead):
                     [reid_branch(output) for reid_branch, output in zip(self.reid_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
                 reid_scores = reid_scores[:, :, 0, :, 0] #(6, 1, 900)
 
-                idx_scores = torch.stack(
-                    [idx_branch(output) for idx_branch, output in zip(self.idx_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 300)
-                idx_scores = idx_scores.transpose(2, 3) #(6, 1, 900, 3, 300)
+                if self.share_view_idx :
+                    #(6, 1, 3, 900, 256)
+                    L, B, V, Q, D = det_outputs.shape
+                    det_outputs_for_idx = det_outputs.transpose(3, 2) #(6, 1, 900, 3, 256)
+                    det_outputs_for_idx = det_outputs_for_idx.reshape(L, B, Q, V*D) #(6, 1, 900, 3*256)
+                    idx_scores = torch.stack(
+                        [idx_branch(output) for idx_branch, output in zip(self.idx_branch, det_outputs_for_idx)], dim=0) #(6, 1, 900, 3*300)
+                    idx_scores = idx_scores.reshape(L, B, Q, V, self.num_input) #(6, 1, 900, 3, 300)
+                else : 
+                    idx_scores = torch.stack(
+                        [idx_branch(output) for idx_branch, output in zip(self.idx_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 300)
+                    idx_scores = idx_scores.transpose(2, 3) #(6, 1, 900, 3, 300)
 
                 '''
                 #visible_scores = torch.stack(
@@ -864,6 +886,49 @@ class TMVReidHead(TMVDetHead):
 
                     return cam_det_bboxes.transpose(1, 0).cpu().detach().numpy(), cam_is_valids.transpose(1, 0).cpu().detach().numpy(), cam_reid_scores.cpu().detach().numpy(), cam_det_cls, cam_det_scores.cpu().detach().numpy(), cam_preds_query.transpose(1, 0).cpu().detach().numpy()
 
+                is_draw_attn = 0
+                if is_draw_attn :
+                    import cv2
+                    cross_attn_map = cross_attn_maps[0].reshape(3, 900, 3, 300).transpose(1, 0) #(900, 3, 3, 300)
+                    #idx_scores #(900, 3, 300)
+                    pred_feats = self.pred_feats.transpose(2, 1).squeeze() # (3, 300, 128),
+                    pred_feats = pred_feats.reshape(-1, 128)[..., :127] #(900, 127)
+                    sim = -torch.cdist(pred_feats, pred_feats, p=2) #(900, 900)
+                    min_val = torch.min(sim)
+                    max_val = torch.max(sim)
+                    sim = (sim - min_val) / (max_val - min_val)
+
+                    cross_attn_map_draw = cross_attn_map[target_idx].cpu().detach().numpy()
+                    idx_scores_draw = idx_scores[target_idx].sigmoid().detach().cpu().numpy()
+                    pred_feats_draw = pred_feats[target_idx].cpu().numpy()
+                    sim = sim.cpu().numpy()
+                    
+                    attn_save_path = os.path.join(save_dir, 'attn_%s.csv'%(scene_id))
+                    idx_score_save_path = os.path.join(save_dir, 'idx_%s.csv'%(scene_id))
+                    sim_save_path = os.path.join(save_dir, 'sim_%s.csv'%(scene_id))
+                    img_save_dir = os.path.join(save_dir, 'attn')
+                    os.makedirs(save_dir, exist_ok=True)
+                    os.makedirs(img_save_dir, exist_ok=True)
+                    np.savetxt(attn_save_path, cross_attn_map_draw.reshape(-1, 300), delimiter=',')
+                    np.savetxt(idx_score_save_path, idx_scores_draw.reshape(-1, 300), delimiter=',')
+                    np.savetxt(sim_save_path, sim, delimiter=',')
+                    
+                    for i in range(len(target_idx)):
+                        for j in range(self.num_decode_views):
+                            for k in range(self.num_input):
+                                cur_attn = cross_attn_map_draw[i, j, j, k]
+                                cur_idx_score = idx_scores_draw[i, j, k]
+                                cur_bbox = self.pred_box[0][k, j] 
+                                save_path = os.path.join(img_save_dir, 'view%d_query%03d_rpn%03d.png'%(j, i, k))
+                                cur_txt = 'attn%.3f_idx%.3f'%(cur_attn, cur_idx_score)
+                                img_path = os.path.join(data_root, '%s-%02d.jpg'%(scene_id, j+1))
+                                img = mmcv.imread(img_path)
+                                x, y, w, h = cur_bbox
+                                color = (0, 0, 255)  # Red color for detected
+                                cv2.rectangle(img, (int(x - w / 2), int(y - h / 2)), (int(x + w / 2), int(y + h / 2)), color, 2)
+                                cv2.putText(img, cur_txt, (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 4, color, 3)
+                                mmcv.imwrite(img, save_path)
+
                 is_draw_gt_target = True
                 #is_draw_gt_target = 0
                 if is_draw_gt_target : 
@@ -890,6 +955,11 @@ class TMVReidHead(TMVDetHead):
 
                     result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores, cam_preds_query)
                     show_result_mtv2d(data_root, cur_save_dir, result, 0, show_query=True) 
+
+                    print('cam_det_bboxes')
+                    print(cam_det_bboxes)
+                    print('pred_idx score & idx')
+                    print(idx_scores[draw_idx].sigmoid().max(-1))
 
                 is_draw_triplet =False 
                 #is_draw_gt_target = 0

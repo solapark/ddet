@@ -30,6 +30,7 @@ class MessytableEval:
         self.json_save_path = os.path.join(output_dir, 'det.json')
         self.Json_saver = Json_saver(img_dir, self.json_save_path, num_views, gt_path)
 
+        self.reid_config_dir = reid_config_dir
         if reid_config_dir is not None : 
             assert gt_path is not None
             self.reid_evaluator = Reid_evaluator(self.json_save_path, gt_path, num_views, reid_config_dir)
@@ -116,9 +117,10 @@ class MessytableEval:
                 log_manager.write_log('%s\t%.2f'%(cls, e))
             log_manager.write_log('\n')
         '''
-        reid_eval = self.reid_evaluator.main()
-        metric += reid_eval.keys() #AP, fpr, IPAA
-        mean_eval += reid_eval.values()
+        if self.reid_config_dir :
+            reid_eval = self.reid_evaluator.main()
+            metric += reid_eval.keys() #AP, fpr, IPAA
+            mean_eval += reid_eval.values()
 
         metric_name = '\t'.join(metric)
         metric_value = ['%.3f'%(m) for m in mean_eval]
@@ -134,4 +136,8 @@ class MessytableEval:
             self.Log_manager.write_log('%s\t%s'%(cls, ev))
         self.Log_manager.write_log('\n')
 
-
+        #del self.Log_manager
+        #del self.Map_calculator
+        #del self.reid_evaluator
+        #del self.DataLoader
+        #del self.Json_saver

@@ -46,6 +46,7 @@ class TMvReidTransformer(VETransformer):
                  use_iterative_refinement=False,
                  reduction='ego',
                  init_cfg=None,
+                 attn_mask_type=['self_attn', 'cross_attn'],
                  query_is_3d_emb=False):
         super(TMvReidTransformer, self).__init__(init_cfg=init_cfg)
 
@@ -62,6 +63,7 @@ class TMvReidTransformer(VETransformer):
         self.use_iterative_refinement = use_iterative_refinement
 
         self.query_is_3d_emb = query_is_3d_emb
+        self.attn_mask_type = attn_mask_type
 
     def init_weights(self):
         # follow the official DETR to init parameters
@@ -131,13 +133,12 @@ class TMvReidTransformer(VETransformer):
         det_outputs, regs = [], []
         if self.det_decoders is not None:
             memory = x.transpose(0, 1) #(3*300*1, 1, 256)
-            attn_masks = [None, None]
             num_query = init_det_points_mtv.shape[-2] #900
             total_num = num_query * num_decode_views #900*3 
             self_attn_mask = memory.new_ones((total_num, total_num)) #(2700, 2700)
             for i in range(num_decode_views):
                 self_attn_mask[i * num_query:(i + 1) * num_query, i * num_query:(i + 1) * num_query] = 0
-            attn_masks[0] = self_attn_mask
+            attn_masks = [self_attn_mask if attn_type == 'self_attn' else None for attn_type in self.attn_mask_type]
             #det_outputs, regs, attn = self.decode_bboxes(init_det_points, init_det_points_mtv, memory, x_pos.transpose(0, 1),
             det_outputs, regs, self_attn_map, cross_attn_map = self.decode_bboxes(init_det_points, init_det_points_mtv, memory, x_pos.transpose(0, 1),
                                                    mask, attn_masks, pos_encoder, reg_branch, num_decode_views, include_attn_map) #(6, 1, 3, 900, 256), []
@@ -289,6 +290,7 @@ class TMVReidTransformerDecoderLayer(BaseTransformerLayer):
                  norm_cfg=dict(type='LN'),
                  ffn_num_fcs=2,
                  with_cp=True,
+                 attn_to_next_layer=None,
                  **kwargs):
         super(TMVReidTransformerDecoderLayer, self).__init__(
             attn_cfgs=attn_cfgs,
@@ -299,9 +301,15 @@ class TMVReidTransformerDecoderLayer(BaseTransformerLayer):
             norm_cfg=norm_cfg,
             ffn_num_fcs=ffn_num_fcs,
             **kwargs)
-        assert len(operation_order) == 6
+        #assert len(operation_order) == 6
         assert set(operation_order) == set(['self_attn', 'norm', 'cross_attn', 'ffn'])
         self.use_checkpoint = with_cp
+        if attn_to_next_layer is not None:
+            self.attn_to_next_layer = attn_to_next_layer
+        else :
+            self.attn_to_next_layer = [True]*self.num_attn
+        self.attn_type = [st for st in operation_order if st in ['self_attn', 'cross_attn']]
+
 
     def _forward(
         self,
@@ -339,19 +347,33 @@ class TMVReidTransformerDecoderLayer(BaseTransformerLayer):
 
         for layer in self.operation_order:
             if layer == 'self_attn':
-                temp_key = temp_value = query
-                query, self_attn_map = self.attentions[attn_index](
-                    query,
-                    temp_key,
-                    temp_value,
-                    identity if self.pre_norm else None,
-                    query_pos=query_pos,
-                    key_pos=query_pos,
-                    attn_mask=attn_masks[attn_index],
-                    key_padding_mask=query_key_padding_mask,
-                    **kwargs)
+                if self.attn_to_next_layer[attn_index] : 
+                    temp_key = temp_value = query
+                    query, self_attn_map = self.attentions[attn_index](
+                        query,
+                        temp_key,
+                        temp_value,
+                        identity if self.pre_norm else None,
+                        query_pos=query_pos,
+                        key_pos=query_pos,
+                        attn_mask=attn_masks[attn_index],
+                        key_padding_mask=query_key_padding_mask,
+                        **kwargs)
+                    identity = query
+                else :
+                    temp_key = temp_value = query[..., :127]
+                    _, self_attn_map = self.attentions[attn_index](
+                        query[..., :127],
+                        temp_key,
+                        temp_value,
+                        identity if self.pre_norm else None,
+                        query_pos=None,
+                        key_pos=None,
+                        attn_mask=attn_masks[attn_index],
+                        key_padding_mask=query_key_padding_mask,
+                        **kwargs)
+
                 attn_index += 1
-                identity = query
 
             elif layer == 'norm':
                 query = self.norms[norm_index](query)

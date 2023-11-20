@@ -810,8 +810,8 @@ class TMVReidHead(TMVDetHead):
 
             # self attn loss
             if self.loss_self_attn_map is not None:
-                self_attn_maps_targets = self.self_attn_maps_targets.to(self_attn_maps.device)
-                loss_self_attn_map = self.loss_self_attn_map(self_attn_maps.reshape(-1, 1), self_attn_maps_targets.reshape(-1, ), self.self_attn_maps_weights, avg_factor=self.self_attn_maps_avg_factor)
+                self_attn_map_targets = self.self_attn_map_targets.to(self_attn_maps.device)
+                loss_self_attn_map = self.loss_self_attn_map(self_attn_maps.reshape(-1, 1), self_attn_map_targets.reshape(-1, ), self.self_attn_map_weights.reshape(-1, 1), avg_factor=self.self_attn_maps_avg_factor)
                 loss_self_attn_map = torch.nan_to_num(loss_self_attn_map)
 
             # cross attn loss

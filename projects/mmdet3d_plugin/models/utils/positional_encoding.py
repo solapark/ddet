@@ -14,6 +14,8 @@ import torch.nn as nn
 from mmcv.cnn.bricks.transformer import POSITIONAL_ENCODING
 from mmcv.runner import BaseModule
 
+from mmdet.models.utils.positional_encoding import SinePositionalEncoding
+
 
 @POSITIONAL_ENCODING.register_module()
 class SinePositionalEncoding3D(BaseModule):
@@ -297,3 +299,51 @@ def pos2posemb3d(pos, num_pos_feats=128, fourier_type='exponential', temperature
         # Output is size [n, 2 * d * num_bands]
         pos_embed = torch.cat([torch.sin(np.pi * pos_embed), torch.cos(np.pi * pos_embed)], dim=-1)
     return pos_embed
+
+@POSITIONAL_ENCODING.register_module()
+class SinePositionalEncoding2D(BaseModule):
+    def __init__(self,
+                 embed_dim,
+                 h,
+                 w,
+                 amplitude=1.,
+                 temperature=10000,
+                 normalize=False,
+                 scale=2 * math.pi,
+                 eps=1e-6,
+                 offset=0.,
+                 init_cfg=None):
+        super(SinePositionalEncoding2D, self).__init__(init_cfg)
+        self.embed_dim=embed_dim
+        self.temperature=temperature
+        self.normalize=normalize
+        self.scale=scale
+        self.eps=eps
+        self.offset=offset
+        self.init_cfg=init_cfg
+        self.h=h
+        self.w=w
+        self.amplitude=amplitude
+        self.pe_forward=None
+
+    def init_pe(self, device):
+        self.pe = SinePositionalEncoding(self.embed_dim//2, self.temperature, self.normalize, self.scale, self.eps, self.offset, self.init_cfg)
+        mask = torch.zeros((1, self.h, self.w))
+        self.pe_forward = (self.pe(mask)+1)/2. * self.amplitude #(1, embed_dim, h, w)
+        self.pe_forward = self.pe_forward.squeeze().transpose(2, 0).to(device) #(w, h, embed_dim)
+
+    def forward(self, idx) :
+        #idx #(..., 2) x_idx and y_idx
+        if self.pe_forward is None :
+            self.init_pe(idx.device)
+
+        idx_shape = list(idx.shape)
+        idx_shape[-1] = self.embed_dim
+    
+        idx_reshape = idx.reshape(-1, 2)
+        x_idx = (idx_reshape[:, 0]*self.w).to(torch.long).clamp(0, (self.w-1))
+        y_idx = (idx_reshape[:, 1]*self.h).to(torch.long).clamp(0, (self.h-1))
+        pe = self.pe_forward[x_idx, y_idx].reshape(idx_shape)
+        return pe 
+
+

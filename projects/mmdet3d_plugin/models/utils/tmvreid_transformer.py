@@ -313,7 +313,6 @@ class TMVReidTransformerDecoderLayer(BaseTransformerLayer):
             self.attn_to_next_layer = [True]*self.num_attn
         self.attn_type = [st for st in operation_order if st in ['self_attn', 'cross_attn']]
 
-
     def _forward(
         self,
         query,
@@ -1614,11 +1613,12 @@ class MultiheadSuperAttention2(nn.MultiheadAttention):
         return x
 
 class MultiheadSVAttention(nn.MultiheadAttention):
-    def set_args(self, num_views=3, num_query=900, num_key=300, scale_dot_type='mean', **kwargs):
+    def set_args(self, num_views=3, num_query=900, num_key=300, scale_dot_type='mean', need_weights=False, **kwargs):
         self.num_views = num_views
         self.num_query = num_query
         self.num_key = num_key
         self.scale_dot_type = scale_dot_type
+        self.need_weights = need_weights
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
                 need_weights: bool = False, attn_mask: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
@@ -1662,6 +1662,7 @@ class MultiheadSVAttention(nn.MultiheadAttention):
         - attn_output_weights: :math:`(N, L, S)` where N is the batch size,
           L is the target sequence length, S is the source sequence length.
         """
+        need_weights = self.need_weights
         if self.batch_first:
             query, key, value = [x.transpose(1, 0) for x in (query, key, value)]
 
@@ -2009,7 +2010,7 @@ class MultiheadSVAttention(nn.MultiheadAttention):
 
         attn = attn.reshape(B, self.num_views, self.num_query, self.num_key).reshape(B, self.num_views*self.num_query, self.num_key) #(8, 3*900, 300)
         output = output.reshape(B, self.num_views*self.num_query, E) #(8, 3*900, 32)
-        return output, None
+        return output, attn
 
     def min_max_norm(self, x):
         min_val = torch.min(x)
@@ -2033,10 +2034,11 @@ class MultiheadSVAttention(nn.MultiheadAttention):
         return x
 
 class MultiheadMVAttention(nn.MultiheadAttention):
-    def set_args(self, num_views=3, num_query=900, num_key=300, **kwargs):
+    def set_args(self, num_views=3, num_query=900, num_key=300, need_weights=True, **kwargs):
         self.num_views = num_views
         self.num_query = num_query
         self.num_key = num_key
+        self.need_weights = need_weights
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
                 need_weights: bool = True, attn_mask: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
@@ -2080,6 +2082,7 @@ class MultiheadMVAttention(nn.MultiheadAttention):
         - attn_output_weights: :math:`(N, L, S)` where N is the batch size,
           L is the target sequence length, S is the source sequence length.
         """
+        need_weights = self.need_weights
         if self.batch_first:
             query, key, value = [x.transpose(1, 0) for x in (query, key, value)]
 

@@ -144,6 +144,7 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
 
         # 3. do Hungarian matching on CPU using linear_sum_assignment
         cost = cost.detach().cpu()
+        org_cost = deepcopy(cost)
         if linear_sum_assignment is None:
             raise ImportError('Please run "pip install scipy" '
                               'to install scipy first.')
@@ -163,4 +164,4 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
             cost[matched_row_inds] = 100.0
 
         self.cost = cost
-        return AssignResult(num_gts, assigned_gt_inds, None, labels=assigned_labels)
+        return AssignResult(num_gts, assigned_gt_inds, None, labels=assigned_labels), org_cost

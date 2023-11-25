@@ -230,6 +230,7 @@ class TMVReidHead(TMVDetHead):
         self.loss_visible = build_loss(loss_visible) if loss_visible else None
         self.loss_self_attn_map = build_loss(loss_self_attn_map) if loss_self_attn_map else None
         self.loss_cross_attn_map = build_loss(loss_cross_attn_map) if loss_cross_attn_map else None
+        self.loss_det_output = build_loss(loss_det_output) if loss_det_output else None
 
         if self.loss_cls is not None and self.loss_cls.use_sigmoid:
             self.cls_out_channels = num_classes
@@ -619,7 +620,7 @@ class TMVReidHead(TMVDetHead):
         #assign_result = self.assigner.assign(bbox_pred, cls_score, gt_bboxes, gt_labels, gt_bboxes_ignore,
         pred_proj_cxcy = self.query2d_norm[0].transpose(1,0).flatten(1,2) #(900, 3*2)
         img_shape = self.img_metas[0]['pad_shape'][:2]
-        assign_result = self.assigner.assign(pred_proj_cxcy, cls_score, visible_score, reid_score, idx_score, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore, img_shape = img_shape)
+        assign_result, self.query_cost = self.assigner.assign(pred_proj_cxcy, cls_score, visible_score, reid_score, idx_score, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore, img_shape = img_shape)
         sampling_result = self.sampler.sample(assign_result, pred_proj_cxcy, gt_proj_cxcy)
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
@@ -871,15 +872,9 @@ class TMVReidHead(TMVDetHead):
                 loss_cross_attn_map = torch.nan_to_num(loss_cross_attn_map)
 
             if self.loss_det_output is not None : 
-                '''
-                3c2 ->  sel -> 
-                3c2 = torch.random_choice(num_views, 2)
-                [1, , 1]
-                anchor = det_outputs[]
-                '''
-                pass 
-
-
+                det_outputs = det_outputs[0] #(3, 900, 256)
+                loss_det_output = self.loss_det_output(det_outputs, self.query_cost)
+                
             # Compute the average number of gt boxes accross all gpus, for
             # normalization purposes
             num_total_pos = loss_cls.new_tensor([num_total_pos])

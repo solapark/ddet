@@ -420,8 +420,10 @@ class CustomMessytableDataset(CustomMtv2DDataset):
 
     def save_reid_pickle(self,
                  results,
-                 visible_thresh,
                  out_dir, 
+                 visible_thresh=0,
+                 eval_thresh=0,
+                 reid_thresh=0,
                  ):
         result_files, tmp_dir = self.format_results(results, None)
 
@@ -431,6 +433,8 @@ class CustomMessytableDataset(CustomMtv2DDataset):
             det_path=result_files['pts_bbox'],
             output_dir=out_dir,
             visible_thresh=visible_thresh,
+            eval_thresh=eval_thresh,
+            reid_thresh=reid_thresh,
             )
         messytable_eval.main()
 

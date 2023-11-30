@@ -64,6 +64,7 @@ class TMVReidHead(TMVDetHead):
                  pos_emb_sig=False,
                  pos_emb_cxcy_only=False,
                  cross_attn2=False,
+                 visible_is_attn = False,
                  all_view_cls_train=False,
                  share_view_cls=False,
                  share_view_idx=False,
@@ -146,6 +147,7 @@ class TMVReidHead(TMVDetHead):
         self.all_view_cls_train = all_view_cls_train
         self.share_view_idx = share_view_idx
         self.cross_attn2 = cross_attn2
+        self.visible_is_attn = visible_is_attn
         self.no_prob=no_prob
         self.rpn_idx_learnable = rpn_idx_learnable
         self.loss_det_output=loss_det_output
@@ -398,19 +400,20 @@ class TMVReidHead(TMVDetHead):
             else:
                 self.idx_branch = nn.ModuleList([deepcopy(idx_branch) for _ in range(num_layers)])
 
-        visible_branch = []
-        for lyr, (in_channel, out_channel) in enumerate(
-                zip([self.output_det_2d_encoding.embed_dim] + visible_hidden_dims,
-                    visible_hidden_dims + [self.visible_out_channels])):
-            visible_branch.append(nn.Linear(in_channel, out_channel))
-            if lyr < len(visible_hidden_dims):
-                visible_branch.append(nn.LayerNorm(out_channel))
-                visible_branch.append(nn.ReLU(inplace=True))
-        visible_branch = nn.Sequential(*visible_branch)
-        if shared_head:
-            self.visible_branch = nn.ModuleList([visible_branch for _ in range(num_layers)])
-        else:
-            self.visible_branch = nn.ModuleList([deepcopy(visible_branch) for _ in range(num_layers)])
+        if not self.visible_is_attn :
+            visible_branch = []
+            for lyr, (in_channel, out_channel) in enumerate(
+                    zip([self.output_det_2d_encoding.embed_dim] + visible_hidden_dims,
+                        visible_hidden_dims + [self.visible_out_channels])):
+                visible_branch.append(nn.Linear(in_channel, out_channel))
+                if lyr < len(visible_hidden_dims):
+                    visible_branch.append(nn.LayerNorm(out_channel))
+                    visible_branch.append(nn.ReLU(inplace=True))
+            visible_branch = nn.Sequential(*visible_branch)
+            if shared_head:
+                self.visible_branch = nn.ModuleList([visible_branch for _ in range(num_layers)])
+            else:
+                self.visible_branch = nn.ModuleList([deepcopy(visible_branch) for _ in range(num_layers)])
 
     def init_weights(self):
         """Initialize weights of the transformer head."""
@@ -426,7 +429,7 @@ class TMVReidHead(TMVDetHead):
             for idx_branch in self.idx_branch:
                 nn.init.constant_(idx_branch[-1].bias, bias_init)
 
-        if self.loss_visible is not None and self.loss_visible.use_sigmoid:
+        if not self.visible_is_attn and self.loss_visible is not None and self.loss_visible.use_sigmoid:
             bias_init = bias_init_with_prob(0.01)
             for visible_branch in self.visible_branch:
                 nn.init.constant_(visible_branch[-1].bias, bias_init)
@@ -521,10 +524,6 @@ class TMVReidHead(TMVDetHead):
                 else :
                     cls_scores = cls_scores.transpose(2,3) #(6, 1, 900, 3, 120)
 
-                visible_scores = torch.stack(
-                    [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
-                visible_scores = visible_scores[..., 0].transpose(2, 3) #(6, 1, 900, 3)
-
                 reid_scores = torch.stack(
                     [reid_branch(output) for reid_branch, output in zip(self.reid_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
                 reid_scores = reid_scores[:, :, 0, :, 0] #(6, 1, 900)
@@ -547,6 +546,22 @@ class TMVReidHead(TMVDetHead):
                         idx_scores = torch.stack(
                             [idx_branch(output) for idx_branch, output in zip(self.idx_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 300)
                         idx_scores = idx_scores.transpose(2, 3) #(6, 1, 900, 3, 300)
+
+                if self.visible_is_attn :
+                    if not self.cross_attn2 : 
+                        #cross_attn_map #(6, 1, 2700, 300)
+                        L, B, _, _ = cross_attn_map.shape
+                        visible_scores = cross_attn_map.reshape(L, B, self.num_decode_views, self.num_query, self.num_input).transpose(2, 3) #(6, 1, 900, 3, 300)
+                        visible_scores = inverse_sigmoid(visible_scores)
+                    else :
+                        visible_scores =  idx_scores
+                    visible_scores = visible_scores.max(-1)[0] #(6, 1, 900, 3)
+
+                else : 
+                    visible_scores = torch.stack(
+                        [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
+                    visible_scores = visible_scores[..., 0].transpose(2, 3) #(6, 1, 900, 3)
+
 
                 '''
                 #visible_scores = torch.stack(

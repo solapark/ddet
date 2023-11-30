@@ -1992,21 +1992,33 @@ class MultiheadSVAttention(nn.MultiheadAttention):
         k = k.reshape(B, self.num_views, self.num_key, E).reshape(-1, self.num_key, E) #(8*3, 300, 32) 
         attn = torch.bmm(q, k.transpose(-2, -1)) #(8*3, 900, 300)
 
-        attn = F.softmax(attn, dim=-1)
+        if self.scale_dot_type =='mean' or self.scale_dot_type =='pivot': 
+            attn = F.softmax(attn, dim=-1)
 
-        if dropout_p > 0.0:
-            attn = F.dropout(attn, p=dropout_p)
-        # (B, Nt, Ns) x (B, Ns, E) -> (B, Nt, E)
-        v = v.reshape(B, self.num_views, self.num_key, E).reshape(-1, self.num_key, E) #(8*3, 300, 32)
-        output = torch.bmm(attn, v) #(B*3, 900, 32)
-        output = output.reshape(B, self.num_views, self.num_query, E) #(B, 3, 900, 32)
+            if dropout_p > 0.0:
+                attn = F.dropout(attn, p=dropout_p)
+            # (B, Nt, Ns) x (B, Ns, E) -> (B, Nt, E)
+            v = v.reshape(B, self.num_views, self.num_key, E).reshape(-1, self.num_key, E) #(8*3, 300, 32)
+            output = torch.bmm(attn, v) #(B*3, 900, 32)
+            output = output.reshape(B, self.num_views, self.num_query, E) #(B, 3, 900, 32)
 
-        if self.scale_dot_type =='mean' : 
-            #output = output.mean(1).repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
-            output = output.mean(1, keepdim=True).repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
+            if self.scale_dot_type =='mean' : 
+                #output = output.mean(1).repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
+                output = output.mean(1, keepdim=True).repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
 
-        if self.scale_dot_type =='pivot' : 
-            output = output[:, :1].repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32) #first view to pivot
+            if self.scale_dot_type =='pivot' : 
+                output = output[:, :1].repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32) #first view to pivot
+
+        elif self.scale_dot_type =='wgt_mean' : 
+            attn = attn.reshape(B, self.num_views, self.num_query, self.num_key).transpose(2,1).reshape(B, self.num_query, self.num_views*self.num_key) #(8*3, 900, 300) -> #(8, 3, 900, 300) -> #(8, 900, 3*300)
+            attn = F.softmax(attn, dim=-1) 
+
+            if dropout_p > 0.0:
+                attn = F.dropout(attn, p=dropout_p)
+
+            output = torch.bmm(attn,  v) #(8, 900, 32)
+            output = output.unsqueeze(1).repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
+            attn = attn.reshape(B, self.num_query, self.num_views, self.num_key).transpose(1,2).reshape(B*self.num_views, self.num_query, self.num_key) #(8, 900, 3, 300) -> (8, 3, 900, 300) -> (8*3, 900, 300)
 
         attn = attn.reshape(B, self.num_views, self.num_query, self.num_key).reshape(B, self.num_views*self.num_query, self.num_key) #(8, 3*900, 300)
         output = output.reshape(B, self.num_views*self.num_query, E) #(8, 3*900, 32)

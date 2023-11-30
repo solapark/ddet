@@ -109,6 +109,7 @@ class TMVReidHead(TMVDetHead):
                  loss_self_attn_map=None,
                  loss_cross_attn_map=None,
                  loss_det_output=None,
+                 loss_pos=None,
                  train_cfg=dict(
                      assigner=dict(
                          type='HungarianAssigner',
@@ -148,6 +149,7 @@ class TMVReidHead(TMVDetHead):
         self.no_prob=no_prob
         self.rpn_idx_learnable = rpn_idx_learnable
         self.loss_det_output=loss_det_output
+        self.loss_pos=loss_pos
         self.pos_encoding = pos_encoding
         self.pos_emb_cxcy_only = pos_emb_cxcy_only
         self.pos_emb_sig=pos_emb_sig
@@ -231,6 +233,8 @@ class TMVReidHead(TMVDetHead):
         self.loss_self_attn_map = build_loss(loss_self_attn_map) if loss_self_attn_map else None
         self.loss_cross_attn_map = build_loss(loss_cross_attn_map) if loss_cross_attn_map else None
         self.loss_det_output = build_loss(loss_det_output) if loss_det_output else None
+        self.loss_pos = build_loss(loss_pos) if loss_pos else None
+
 
         if self.loss_cls is not None and self.loss_cls.use_sigmoid:
             self.cls_out_channels = num_classes
@@ -776,7 +780,7 @@ class TMVReidHead(TMVDetHead):
             dict[str, Tensor]: A dictionary of loss components for outputs from
                 a single decoder layer.
         """
-        loss_cls, loss_visible, loss_bbox, loss_seg, loss_self_attn_map, loss_cross_attn_map, loss_rpn, loss_det_output = None, None, None, None, None, None, None, None
+        loss_cls, loss_visible, loss_bbox, loss_seg, loss_self_attn_map, loss_cross_attn_map, loss_rpn, loss_det_output, loss_pos = None, None, None, None, None, None, None, None, None
         if cls_scores is not None:
             num_imgs = cls_scores.size(0) #1
             cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
@@ -798,28 +802,6 @@ class TMVReidHead(TMVDetHead):
             bbox_targets = torch.cat(bbox_targets_list, 0)
             bbox_weights = torch.cat(bbox_weights_list, 0)
 
-            # classification loss cls_scores #(1, 900, 3, 120)
-            if self.all_view_cls_train :
-                cls_scores = cls_scores.transpose(1, 2).reshape(-1, self.cls_out_channels) #(900*3, 120)
-                # construct weighted avg_factor to match with the official DETR repo
-                cls_avg_factor = num_total_pos * 1.0 + \
-                    num_total_neg * self.bg_cls_weight
-                if self.sync_cls_avg_factor:
-                    cls_avg_factor = reduce_mean(cls_scores.new_tensor([cls_avg_factor]))
-
-                cls_avg_factor = max(cls_avg_factor, 1)
-                loss_cls = self.loss_cls(cls_scores, labels.repeat(self.num_decode_views), label_weights.repeat(self.num_decode_views), avg_factor=cls_avg_factor*self.num_decode_views)
-            else :
-                cls_scores = cls_scores[:,:,0].reshape(-1, self.cls_out_channels) #(900, 120)
-                # construct weighted avg_factor to match with the official DETR repo
-                cls_avg_factor = num_total_pos * 1.0 + \
-                    num_total_neg * self.bg_cls_weight
-                if self.sync_cls_avg_factor:
-                    cls_avg_factor = reduce_mean(cls_scores.new_tensor([cls_avg_factor]))
-
-                cls_avg_factor = max(cls_avg_factor, 1)
-                loss_cls = self.loss_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
-
             # visible loss
             visible_scores = visible_scores.reshape(-1, self.num_decode_views) #(900, 3)
             # construct weighted avg_factor to match with the official DETR repo
@@ -834,6 +816,25 @@ class TMVReidHead(TMVDetHead):
             visible_cls_avg_factor = max(visible_cls_avg_factor, 1)
             loss_visible = self.loss_visible(visible_scores.reshape(-1,1), visibles.reshape(-1,), visible_weights.reshape(-1,), avg_factor=visible_cls_avg_factor)
 
+            # classification loss cls_scores #(1, 900, 3, 120)
+            if self.all_view_cls_train :
+                cls_scores = cls_scores.reshape(-1, self.cls_out_channels) #(900*3, 120)
+                cls_avg_factor = visible_cls_avg_factor
+                all_view_labels = labels.unsqueeze(1).repeat(1, self.num_decode_views).reshape(-1,) #(900*3, )
+                all_view_labels_weights = label_weights.unsqueeze(1).repeat(1, self.num_decode_views).reshape(-1,) #(900*3, )
+                all_view_labels_weights[(visible_weights.reshape(-1,) == 1) & (visibles.reshape(-1,) == 1)] = 0
+                loss_cls = self.loss_cls(cls_scores, all_view_labels, all_view_labels_weights, avg_factor=cls_avg_factor)
+            else :
+                cls_scores = cls_scores[:,:,0].reshape(-1, self.cls_out_channels) #(900, 120)
+                # construct weighted avg_factor to match with the official DETR repo
+                cls_avg_factor = num_total_pos * 1.0 + \
+                    num_total_neg * self.bg_cls_weight
+                if self.sync_cls_avg_factor:
+                    cls_avg_factor = reduce_mean(cls_scores.new_tensor([cls_avg_factor]))
+
+                cls_avg_factor = max(cls_avg_factor, 1)
+                loss_cls = self.loss_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
+
             # reid loss
             reid_scores = reid_scores.reshape(-1, self.reid_out_channels) #(900, 1)
             # construct weighted avg_factor to match with the official DETR repo
@@ -841,6 +842,7 @@ class TMVReidHead(TMVDetHead):
             loss_reid = self.loss_reid(reid_scores, reids, reid_weights, avg_factor=reid_avg_factor)
 
             # idx loss
+            idx_scores_org = idx_scores.reshape(idx_scores.shape)
             idx_scores = idx_scores.reshape(-1, self.idx_out_channels) #(900*3, 300)
             idx = idx.reshape(-1,) #(900*3, )
             idx_weights = idx_weights.reshape(-1, ) #(900*3, )
@@ -871,9 +873,13 @@ class TMVReidHead(TMVDetHead):
                 loss_cross_attn_map = .1 * loss_cross_attn_map/(self.num_decode_views*(self.num_decode_views-1))
                 loss_cross_attn_map = torch.nan_to_num(loss_cross_attn_map)
 
+            #det_outputs #(3, 900, 256)
             if self.loss_det_output is not None : 
-                det_outputs = det_outputs[0] #(3, 900, 256)
-                loss_det_output = self.loss_det_output(det_outputs, self.query_cost)
+                loss_det_output = self.loss_det_output(det_outputs[0], self.query_cost)
+
+            if self.loss_pos is not None :
+                #(900, 3, 300), #(900, Ngt),  #(900, 3, 2), #(300, 3, 2)
+                loss_pos = self.loss_pos(idx_scores_org[0], self.query_cost, self.query2d_norm[0].transpose(0,1), self.pred_box_norm[0,:,:,0,:2].transpose(0,1))
                 
             # Compute the average number of gt boxes accross all gpus, for
             # normalization purposes
@@ -1069,7 +1075,7 @@ class TMVReidHead(TMVDetHead):
             loss_seg = self.loss_seg(seg_preds, gt_seg_list[0])
             loss_seg = torch.nan_to_num(loss_seg)
 
-        return loss_cls, loss_visible, loss_reid, loss_idx, loss_bbox, loss_seg, loss_self_attn_map, loss_cross_attn_map, loss_rpn, loss_det_output
+        return loss_cls, loss_visible, loss_reid, loss_idx, loss_bbox, loss_seg, loss_self_attn_map, loss_cross_attn_map, loss_rpn, loss_det_output, loss_pos
 
     @force_fp32(apply_to=('preds_dicts'))
     def loss(
@@ -1170,9 +1176,9 @@ class TMVReidHead(TMVDetHead):
                 all_cross_attn_maps = [None] * num_dec_layers
 
             if self.debug : 
-                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_cross_attn_map, losses_rpn, losses_det_output = multi_apply(self.loss_single, all_cls_scores[-1:], all_visible_scores[-1:], all_reid_scores[-1:], all_idx_scores[-1:], all_bbox_preds[-1:], all_seg_preds[-1:], all_self_attn_maps[-1:], all_cross_attn_maps[-1:], all_det_outputs[-1:], all_gt_bboxes_list[-1:], all_gt_labels_list[-1:], all_gt_visibles_list[-1:], all_gt_idx_list[-1:], all_gt_proj_cxcy_list[-1:], all_gt_seg_list[-1:], all_gt_bboxes_ignore_list[-1:])
+                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_cross_attn_map, losses_rpn, losses_det_output, losses_pos = multi_apply(self.loss_single, all_cls_scores[-1:], all_visible_scores[-1:], all_reid_scores[-1:], all_idx_scores[-1:], all_bbox_preds[-1:], all_seg_preds[-1:], all_self_attn_maps[-1:], all_cross_attn_maps[-1:], all_det_outputs[-1:], all_gt_bboxes_list[-1:], all_gt_labels_list[-1:], all_gt_visibles_list[-1:], all_gt_idx_list[-1:], all_gt_proj_cxcy_list[-1:], all_gt_seg_list[-1:], all_gt_bboxes_ignore_list[-1:])
             else : 
-                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_cross_attn_map, losses_rpn, losses_det_output = multi_apply(self.loss_single, all_cls_scores, all_visible_scores, all_reid_scores, all_idx_scores, all_bbox_preds, all_seg_preds, all_self_attn_maps, all_cross_attn_maps, all_det_outputs, all_gt_bboxes_list, all_gt_labels_list, all_gt_visibles_list, all_gt_idx_list, all_gt_proj_cxcy_list, all_gt_seg_list, all_gt_bboxes_ignore_list)
+                losses_cls, losses_visible, losses_reid, losses_idx, losses_bbox, losses_seg, losses_self_attn_map, losses_cross_attn_map, losses_rpn, losses_det_output, losses_pos = multi_apply(self.loss_single, all_cls_scores, all_visible_scores, all_reid_scores, all_idx_scores, all_bbox_preds, all_seg_preds, all_self_attn_maps, all_cross_attn_maps, all_det_outputs, all_gt_bboxes_list, all_gt_labels_list, all_gt_visibles_list, all_gt_idx_list, all_gt_proj_cxcy_list, all_gt_seg_list, all_gt_bboxes_ignore_list)
 
             # loss of proposal generated from encode feature map.
             if enc_cls_scores is not None:
@@ -1198,6 +1204,8 @@ class TMVReidHead(TMVDetHead):
                     loss_dict['loss_rpn'] = losses_rpn[-1]
                 if losses_det_output[0] is not None:
                     loss_dict['loss_det_output'] = losses_det_output[-1]
+                if losses_pos[0] is not None:
+                    loss_dict['loss_pos'] = losses_pos[-1]
 
                 # loss from other decoder layers
                 num_dec_layer = 0
@@ -1216,6 +1224,8 @@ class TMVReidHead(TMVDetHead):
                         loss_dict[f'd{num_dec_layer}.loss_rpn'] = losses_rpn[num_dec_layer]
                     if losses_det_output[0] is not None:
                         loss_dict[f'd{num_dec_layer}.loss_det_output'] = losses_det_output[num_dec_layer]
+                    if losses_pos[0] is not None:
+                        loss_dict[f'd{num_dec_layer}.loss_pos'] = losses_pos[num_dec_layer]
 
                     num_dec_layer += 1
 
@@ -1376,6 +1386,7 @@ class TMVReidHead(TMVDetHead):
         pred_box_norm = deepcopy(pred_box)
         pred_box_norm[..., [0,2]] /= imgW # cx w
         pred_box_norm[..., [1,3]] /= imgH # cy h
+        self.pred_box_norm = pred_box_norm
 
         if not self.pos_emb_cxcy_only :
             extrinsics = []

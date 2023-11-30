@@ -154,6 +154,7 @@ model = dict(
         #loss_idx=dict(type='FocalLoss', use_sigmoid=True, activated=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         loss_idx=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         loss_det_output=dict(type='TripletLoss', num_views=num_views, alpha=1., loss_weight=2.0, valid_cost=.6),
+        loss_pos=dict(type='PosLoss', alpha=.2, loss_weight=2.0, valid_cost=.6, pos_thresh=5, neg_thresh=10),
     ),
     # model training and testing settings
     train_cfg=dict(

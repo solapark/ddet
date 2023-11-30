@@ -39,7 +39,7 @@ img_norm_cfg = dict(mean=[103.530, 116.280, 123.675], std=[57.375, 57.120, 58.39
 class_names = ['water1', 'water2', 'pepsi', 'coca1', 'coca2', 'coca3', 'coca4', 'tea1', 'tea2', 'yogurt', 'ramen1', 'ramen2', 'ramen3', 'ramen4', 'ramen5', 'ramen6', 'ramen7', 'juice1', 'juice2', 'can1', 'can2', 'can3', 'can4', 'can5', 'can6', 'can7', 'can8', 'can9', 'ham1', 'ham2', 'pack1', 'pack2', 'pack3', 'pack4', 'pack5', 'pack6', 'snack1', 'snack2', 'snack3', 'snack4', 'snack5', 'snack6', 'snack7', 'snack8', 'snack9', 'snack10', 'snack11', 'snack12', 'snack13', 'snack14', 'snack15', 'snack16', 'snack17', 'snack18', 'snack19', 'snack20', 'snack21', 'snack22', 'snack23', 'snack24', 'green_apple', 'red_apple', 'tangerine', 'lime', 'lemon', 'yellow_quince', 'green_quince', 'white_quince', 'fruit1', 'fruit2', 'peach', 'banana', 'fruit3', 'pineapple', 'fruit4', 'strawberry', 'cherry', 'red_pimento', 'green_pimento', 'carrot', 'cabbage1', 'cabbage2', 'eggplant', 'bread', 'baguette', 'sandwich', 'hamburger', 'hotdog', 'donuts', 'cake', 'onion', 'marshmallow', 'mooncake', 'shirimpsushi', 'sushi1', 'sushi2', 'big_spoon', 'small_spoon', 'fork', 'knife', 'big_plate', 'small_plate', 'bowl', 'white_ricebowl', 'blue_ricebowl', 'black_ricebowl', 'green_ricebowl', 'black_mug', 'gray_mug', 'pink_mug', 'green_mug', 'blue_mug', 'blue_cup', 'orange_cup', 'yellow_cup', 'big_wineglass', 'small_wineglass', 'glass1', 'glass2', 'glass3']
 
 #input_modality = dict(use_lidar=False, use_camera=True, use_radar=False, use_map=False, use_external=False)
-save_dir = '/home/sapark/VEDet/result/tmvreid_messytable_rpn43'
+save_dir = '/home/sapark/VEDet/result/tmvreid_messytable_rpn45'
 img_root = '/home/sapark/VEDet/data/MessyTable/images/' 
 reid_input_pickle_dir = '/home/sapark/VEDet_org/data/'
 bands, max_freq = 64, 8
@@ -113,7 +113,7 @@ model = dict(
                     type='TMVReidTransformerDecoderLayer',
                     attn_cfgs=[
                         dict(type='TMVReidMultiheadCrossAttention', embed_dims=256, num_heads=8, dropout=0.1,
-                            attention=dict(type='MultiheadSVAttention', num_views=num_views, num_query=num_query, num_key=num_rpn_per_view)),
+                            attention=dict(type='MultiheadSVAttention', num_views=num_views, num_query=num_query, num_key=num_rpn_per_view, scale_dot_type='wgt_mean')),
                         dict(type='TMVReidMultiheadCrossAttention', embed_dims=256, num_heads=8, dropout=0.1,
                             attention=dict(type='MultiheadMVAttention', num_views=num_views, num_query=num_query, num_key=num_rpn_per_view)),
                     ],
@@ -153,7 +153,6 @@ model = dict(
         loss_reid=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         #loss_idx=dict(type='FocalLoss', use_sigmoid=True, activated=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         loss_idx=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
-        loss_det_output=dict(type='TripletLoss', num_views=num_views, alpha=1., loss_weight=2.0, valid_cost=.6),
     ),
     # model training and testing settings
     train_cfg=dict(
@@ -304,5 +303,5 @@ find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 #load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
-load_from = 'work_dirs/tmvreid_messytable_rpn34_new/epoch_200.pth'
+load_from = 'work_dirs/tmvreid_messytable_rpn18/epoch_200.pth'
 resume_from = None

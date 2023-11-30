@@ -45,7 +45,7 @@ class RpnAssigner:
                 pos_candidates = torch.where(score[i, query_idx] >= self.pos_thresh)[0]
                 neg_candidates = torch.where((self.pos_thresh > score[i, query_idx]) & (score[i, query_idx] >= self.neg_thresh))[0]
 
-                if len(pos_candidates) > 0 and len(neg_candidates) > 0:
+                if len(pos_candidates) and len(neg_candidates) :
                     pos_idx = pos_candidates[torch.randint(0, len(pos_candidates), (1,))]
                     neg_idx = neg_candidates[torch.randint(0, len(neg_candidates), (1,))]
                     margin = score[i, query_idx, pos_idx] - score[i, query_idx, neg_idx]

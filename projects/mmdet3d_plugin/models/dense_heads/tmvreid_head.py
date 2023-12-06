@@ -61,10 +61,12 @@ class TMVReidHead(TMVDetHead):
 
     def __init__(self,
                  in_channels,
+                 idx_is_attn_org=False,
                  pos_emb_sig=False,
                  pos_emb_cxcy_only=False,
                  cross_attn2=False,
                  visible_is_attn = False,
+                 visible_is_attn_mean=False,
                  all_view_cls_train=False,
                  share_view_cls=False,
                  share_view_idx=False,
@@ -148,6 +150,7 @@ class TMVReidHead(TMVDetHead):
         self.share_view_idx = share_view_idx
         self.cross_attn2 = cross_attn2
         self.visible_is_attn = visible_is_attn
+        self.visible_is_attn_mean = visible_is_attn_mean
         self.no_prob=no_prob
         self.rpn_idx_learnable = rpn_idx_learnable
         self.loss_det_output=loss_det_output
@@ -155,6 +158,7 @@ class TMVReidHead(TMVDetHead):
         self.pos_encoding = pos_encoding
         self.pos_emb_cxcy_only = pos_emb_cxcy_only
         self.pos_emb_sig=pos_emb_sig
+        self.idx_is_attn_org = idx_is_attn_org
 
         if self.cross_attn2 :
             self.include_attn_map = True 
@@ -520,6 +524,13 @@ class TMVReidHead(TMVDetHead):
                         [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 120)
                 #if cls_scores.dim() == 5:
                 if is_test:
+                    '''
+                    if self.all_view_cls_train :
+                        valid = (visible_scores.sigmoid() >.5 ) #(6, 1, 900, 3) #(6, 1, 900, 3, 120)
+                        cls_scores = (valid * cls_scores.transpose(2,3).sum(-2)) / valid.sum(-1) #(6, 1, 900, 120)
+                    else :
+                        cls_scores = cls_scores[:, :, 0] #(6, 1, 900, 120)
+                    '''
                     cls_scores = cls_scores[:, :, 0] #(6, 1, 900, 120)
                 else :
                     cls_scores = cls_scores.transpose(2,3) #(6, 1, 900, 3, 120)
@@ -532,7 +543,8 @@ class TMVReidHead(TMVDetHead):
                     L, B, _, _ = cross_attn_map.shape
                     #cross_attn_map #(6, 1, 2700, 300)
                     idx_scores = cross_attn_map.reshape(L, B, self.num_decode_views, self.num_query, self.num_input).transpose(2, 3) #(6, 1, 900, 3, 300)
-                    idx_scores = inverse_sigmoid(idx_scores)
+                    if not self.idx_is_attn_org :
+                        idx_scores = inverse_sigmoid(idx_scores)
                 else : 
                     if self.share_view_idx :
                         #(6, 1, 3, 900, 256)
@@ -555,7 +567,11 @@ class TMVReidHead(TMVDetHead):
                         visible_scores = inverse_sigmoid(visible_scores)
                     else :
                         visible_scores =  idx_scores
-                    visible_scores = visible_scores.max(-1)[0] #(6, 1, 900, 3)
+                    if self.visible_is_attn_mean : 
+                        visible_scores = visible_scores.mean(-1) #(6, 1, 900, 3)
+                    else : 
+                        visible_scores = visible_scores.max(-1)[0] #(6, 1, 900, 3)
+                        #5/0
 
                 else : 
                     visible_scores = torch.stack(

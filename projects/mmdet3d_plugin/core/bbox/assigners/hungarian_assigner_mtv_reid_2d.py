@@ -120,7 +120,13 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
 
         # classification and bboxcost.
         if self.cls_cost.weight > 0 :
-            cost = self.cls_cost(cls_pred, gt_labels)
+            num_query, num_view, num_cls = cls_pred.shape
+            cost = self.cls_cost(cls_pred.reshape(num_query*num_view,num_cls), gt_labels) #(900*3, 120), #(50,) -> (900*3, 50)
+            cost = cost.reshape(num_query, num_view, num_gts).transpose(0,2) #(900,3,50) -> (50,3,900)
+            cost[gt_visibles==1] = 0
+            cost = cost.sum(1).transpose(0,1) #(50,900)->(900,50)
+            cost = ( cost/ (gt_visibles==0).sum(-1)) #(900,50)
+            #cost = self.cls_cost(cls_pred, gt_labels) #(900, 3, 120), #(50,)
             
         # visible_cost.
         #visible_cost = []
@@ -143,8 +149,8 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
             cost = cost + query_cost
 
         # 3. do Hungarian matching on CPU using linear_sum_assignment
+        query_cost = query_cost.detach().cpu()
         cost = cost.detach().cpu()
-        org_cost = deepcopy(cost)
         if linear_sum_assignment is None:
             raise ImportError('Please run "pip install scipy" '
                               'to install scipy first.')
@@ -164,4 +170,4 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
             cost[matched_row_inds] = 100.0
 
         self.cost = cost
-        return AssignResult(num_gts, assigned_gt_inds, None, labels=assigned_labels), org_cost
+        return AssignResult(num_gts, assigned_gt_inds, None, labels=assigned_labels), query_cost

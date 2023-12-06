@@ -39,10 +39,9 @@ img_norm_cfg = dict(mean=[103.530, 116.280, 123.675], std=[57.375, 57.120, 58.39
 class_names = ['water1', 'water2', 'pepsi', 'coca1', 'coca2', 'coca3', 'coca4', 'tea1', 'tea2', 'yogurt', 'ramen1', 'ramen2', 'ramen3', 'ramen4', 'ramen5', 'ramen6', 'ramen7', 'juice1', 'juice2', 'can1', 'can2', 'can3', 'can4', 'can5', 'can6', 'can7', 'can8', 'can9', 'ham1', 'ham2', 'pack1', 'pack2', 'pack3', 'pack4', 'pack5', 'pack6', 'snack1', 'snack2', 'snack3', 'snack4', 'snack5', 'snack6', 'snack7', 'snack8', 'snack9', 'snack10', 'snack11', 'snack12', 'snack13', 'snack14', 'snack15', 'snack16', 'snack17', 'snack18', 'snack19', 'snack20', 'snack21', 'snack22', 'snack23', 'snack24', 'green_apple', 'red_apple', 'tangerine', 'lime', 'lemon', 'yellow_quince', 'green_quince', 'white_quince', 'fruit1', 'fruit2', 'peach', 'banana', 'fruit3', 'pineapple', 'fruit4', 'strawberry', 'cherry', 'red_pimento', 'green_pimento', 'carrot', 'cabbage1', 'cabbage2', 'eggplant', 'bread', 'baguette', 'sandwich', 'hamburger', 'hotdog', 'donuts', 'cake', 'onion', 'marshmallow', 'mooncake', 'shirimpsushi', 'sushi1', 'sushi2', 'big_spoon', 'small_spoon', 'fork', 'knife', 'big_plate', 'small_plate', 'bowl', 'white_ricebowl', 'blue_ricebowl', 'black_ricebowl', 'green_ricebowl', 'black_mug', 'gray_mug', 'pink_mug', 'green_mug', 'blue_mug', 'blue_cup', 'orange_cup', 'yellow_cup', 'big_wineglass', 'small_wineglass', 'glass1', 'glass2', 'glass3']
 
 #input_modality = dict(use_lidar=False, use_camera=True, use_radar=False, use_map=False, use_external=False)
-save_dir = '/home/sapark/VEDet/result/tmvreid_messytable_rpn36'
+save_dir = '/home/sapark/VEDet/result/tmvreid_messytable_rpn65'
 img_root = '/home/sapark/VEDet/data/MessyTable/images/' 
 reid_input_pickle_dir = '/home/sapark/VEDet_org/data/'
-img_h, img_w = 1080, 1920
 bands, max_freq = 64, 8
 num_views = 3
 num_query = 900
@@ -85,9 +84,9 @@ model = dict(
     gt_depth_sup=False,  # use cache to supervise
     pts_bbox_head=dict(
         type='TMVReidHead',
-        pos_emb_cxcy_only=True,
         include_attn_map=True,
         #share_view_cls=True,
+        all_view_cls_train=True,
         cross_attn2=True,
         emb_intrinsics=True,
         pred_size=pred_size,
@@ -132,11 +131,22 @@ model = dict(
             max_num=300,
             num_views=num_views,
             num_classes=num_classes),
-        pos_encoding=dict(
-            type='SinePositionalEncoding2D',
+        input_ray_encoding=dict(
+            type='FourierMLPEncoding',
+            input_channels=15,
+            hidden_dims=[int(1.5 * 15 * 2 * bands)],
             embed_dim=256,
-            h=img_h,
-            w=img_w),
+            fourier_type='linear',
+            fourier_channels=15 * 2 * bands,
+            max_frequency=max_freq),
+        output_det_encoding=dict(
+            type='FourierMLPEncoding',
+            input_channels=13,
+            hidden_dims=[int(1.5 * 13 * 2 * bands)],
+            embed_dim=256,
+            fourier_type='linear',
+            fourier_channels=13 * 2 * bands,
+            max_frequency=max_freq),
         loss_cls=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         loss_visible=dict(type='FocalLoss', use_sigmoid=True, gamma=2.0, alpha=0.25, loss_weight=2.0),
         loss_bbox=dict(type='L1Loss', loss_weight=.25/10),
@@ -153,12 +163,9 @@ model = dict(
             point_cloud_range=point_cloud_range,
             out_size_factor=4,
             assigner2_rpn_only=False,
-            assigner2=dict(
-                type='EpipolarAssignerMtvReid2D',
-                valid_cost_thresh=.6),
             assigner=dict(
                 type='HungarianAssignerMtvReid2D',
-                cls_cost=dict(type='FocalLossCost', weight=0),
+                cls_cost=dict(type='FocalLossCost', weight=1./10),
                 reg_cost=dict(type='BBoxMtv2DL1Cost', weight=0, pred_size=pred_size, num_views=num_views),
                 iou_cost=dict(type='BBoxMtv2DIoUCost', weight=0, pred_size=pred_size, num_views=num_views),  # Fake cost. This is just to make it compatible with DETR head. 
                 query_cost=dict(type='QueryCost', weight=1, num_views=num_views),  
@@ -297,5 +304,6 @@ find_unused_parameters = False
 
 runner = dict(type='EpochBasedRunner', max_epochs=total_epochs)
 #load_from = 'ckpts/fcos3d_vovnet_imgbackbone-remapped.pth'
+#load_from = 'work_dirs/tmvreid_messytable_rpn38/epoch_200.pth'
 load_from = 'work_dirs/tmvreid_messytable_rpn18/epoch_200.pth'
 resume_from = None

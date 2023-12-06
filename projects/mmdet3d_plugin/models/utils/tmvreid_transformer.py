@@ -1613,12 +1613,14 @@ class MultiheadSuperAttention2(nn.MultiheadAttention):
         return x
 
 class MultiheadSVAttention(nn.MultiheadAttention):
-    def set_args(self, num_views=3, num_query=900, num_key=300, scale_dot_type='mean', need_weights=False, **kwargs):
+    def set_args(self, num_views=3, num_query=900, num_key=300, scale_dot_type='mean', need_weights=False, key_softmax = False, return_attn_org=False, **kwargs):
         self.num_views = num_views
         self.num_query = num_query
         self.num_key = num_key
         self.scale_dot_type = scale_dot_type
         self.need_weights = need_weights
+        self.key_softmax = key_softmax
+        self.return_attn_org = return_attn_org
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
                 need_weights: bool = False, attn_mask: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
@@ -1990,7 +1992,11 @@ class MultiheadSVAttention(nn.MultiheadAttention):
 
         q = q.reshape(B, self.num_views, self.num_query, E).reshape(-1, self.num_query, E) #(8*3, 900, 32) 
         k = k.reshape(B, self.num_views, self.num_key, E).reshape(-1, self.num_key, E) #(8*3, 300, 32) 
-        attn = torch.bmm(q, k.transpose(-2, -1)) #(8*3, 900, 300)
+        attn_org = torch.bmm(q, k.transpose(-2, -1)) #(8*3, 900, 300)
+        attn = attn_org.reshape(attn_org.shape)
+
+        if self.key_softmax :
+            attn = F.softmax(attn, dim=-2)
 
         if self.scale_dot_type =='mean' or self.scale_dot_type =='pivot': 
             attn = F.softmax(attn, dim=-1)
@@ -2022,6 +2028,8 @@ class MultiheadSVAttention(nn.MultiheadAttention):
 
         attn = attn.reshape(B, self.num_views, self.num_query, self.num_key).reshape(B, self.num_views*self.num_query, self.num_key) #(8, 3*900, 300)
         output = output.reshape(B, self.num_views*self.num_query, E) #(8, 3*900, 32)
+        if self.return_attn_org :
+            attn = attn_org
         return output, attn
 
     def min_max_norm(self, x):
@@ -2046,11 +2054,13 @@ class MultiheadSVAttention(nn.MultiheadAttention):
         return x
 
 class MultiheadMVAttention(nn.MultiheadAttention):
-    def set_args(self, num_views=3, num_query=900, num_key=300, need_weights=True, **kwargs):
+    def set_args(self, num_views=3, num_query=900, num_key=300, need_weights=True, key_softmax=False, return_attn_org=False, **kwargs):
         self.num_views = num_views
         self.num_query = num_query
         self.num_key = num_key
         self.need_weights = need_weights
+        self.key_softmax = key_softmax
+        self.return_attn_org = return_attn_org
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
                 need_weights: bool = True, attn_mask: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
@@ -2422,7 +2432,11 @@ class MultiheadMVAttention(nn.MultiheadAttention):
 
         q = q.reshape(B, self.num_views, self.num_query, E).reshape(-1, self.num_query, E) #(8*3, 900, 32) 
         k = k.reshape(B, self.num_views, self.num_key, E).reshape(-1, self.num_key, E) #(8*3, 300, 32) 
-        attn = torch.bmm(q, k.transpose(-2, -1)) #(8*3, 900, 300)
+        attn_org = torch.bmm(q, k.transpose(-2, -1)) #(8*3, 900, 300)
+        attn = attn_org.reshape(attn_org.shape)
+
+        if self.key_softmax :
+            attn = F.softmax(attn, dim=-2)
 
         attn = F.softmax(attn, dim=-1)
 
@@ -2434,6 +2448,8 @@ class MultiheadMVAttention(nn.MultiheadAttention):
 
         attn = attn.reshape(B, self.num_views, self.num_query, self.num_key).reshape(B, self.num_views*self.num_query, self.num_key) #(8, 3*900, 300)
         output = output.reshape(B, self.num_views, self.num_query, E).reshape(B, self.num_views*self.num_query, E) #(8, 3*900, 32)
+        if self.return_attn_org :
+            attn = attn_org
         return output, attn
 
     def min_max_norm(self, x):

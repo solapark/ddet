@@ -516,29 +516,6 @@ class TMVReidHead(TMVDetHead):
             # detection from queries
             #if len(det_outputs) > 0 and len(regs) > 0:
             if len(det_outputs) > 0 :
-                if self.share_view_cls :
-                    cls_scores = torch.stack(
-                        [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs.mean(2, keepdim=True))], dim=0) #(6, 1, 1, 900, 120)
-                else :
-                    cls_scores = torch.stack(
-                        [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 120)
-                #if cls_scores.dim() == 5:
-                if is_test:
-                    '''
-                    if self.all_view_cls_train :
-                        valid = (visible_scores.sigmoid() >.5 ) #(6, 1, 900, 3) #(6, 1, 900, 3, 120)
-                        cls_scores = (valid * cls_scores.transpose(2,3).sum(-2)) / valid.sum(-1) #(6, 1, 900, 120)
-                    else :
-                        cls_scores = cls_scores[:, :, 0] #(6, 1, 900, 120)
-                    '''
-                    cls_scores = cls_scores[:, :, 0] #(6, 1, 900, 120)
-                else :
-                    cls_scores = cls_scores.transpose(2,3) #(6, 1, 900, 3, 120)
-
-                reid_scores = torch.stack(
-                    [reid_branch(output) for reid_branch, output in zip(self.reid_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
-                reid_scores = reid_scores[:, :, 0, :, 0] #(6, 1, 900)
-
                 if self.cross_attn2 :
                     L, B, _, _ = cross_attn_map.shape
                     #cross_attn_map #(6, 1, 2700, 300)
@@ -577,6 +554,29 @@ class TMVReidHead(TMVDetHead):
                     visible_scores = torch.stack(
                         [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
                     visible_scores = visible_scores[..., 0].transpose(2, 3) #(6, 1, 900, 3)
+
+                if self.share_view_cls :
+                    cls_scores = torch.stack(
+                        [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs.mean(2, keepdim=True))], dim=0) #(6, 1, 1, 900, 120)
+                else :
+                    cls_scores = torch.stack(
+                        [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 120)
+                #if cls_scores.dim() == 5:
+                if is_test:
+                    if self.all_view_cls_train :
+                        #valid = (visible_scores.sigmoid() >.5 ) #(6, 1, 900, 3) 
+                        #new_cls_scores = (valid.unsqueeze(-1) * cls_scores.transpose(2,3)).sum(-2) / (valid.sum(-1).unsqueeze(-1) + 1e-9) #(6, 1, 900, 120)
+                        #cls_scores = cls_scores.mean(2)
+                        cls_scores = cls_scores[:, :, 0] #(6, 1, 900, 120)
+                    else :
+                        cls_scores = cls_scores[:, :, 0] #(6, 1, 900, 120)
+                    #cls_scores = cls_scores[:, :, 0] #(6, 1, 900, 120)
+                else :
+                    cls_scores = cls_scores.transpose(2,3) #(6, 1, 900, 3, 120)
+
+                reid_scores = torch.stack(
+                    [reid_branch(output) for reid_branch, output in zip(self.reid_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
+                reid_scores = reid_scores[:, :, 0, :, 0] #(6, 1, 900)
 
 
                 '''
@@ -655,7 +655,13 @@ class TMVReidHead(TMVDetHead):
         #assign_result = self.assigner.assign(bbox_pred, cls_score, gt_bboxes, gt_labels, gt_bboxes_ignore,
         pred_proj_cxcy = self.query2d_norm[0].transpose(1,0).flatten(1,2) #(900, 3*2)
         img_shape = self.img_metas[0]['pad_shape'][:2]
-        assign_result, self.query_cost = self.assigner.assign(pred_proj_cxcy, cls_score, visible_score, reid_score, idx_score, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore, img_shape = img_shape)
+
+        idx_scores = idx_score.reshape(-1, self.num_decode_views, self.idx_out_channels) #(900, 3, 300)
+        _, pred_idx = F.softmax(idx_scores, dim=-1).max(-1) #(900, 3), (900, 3)
+        cam_det_bboxes = get_box_form_pred_idx(self.pred_box[0], pred_idx, self.num_decode_views)
+        gt_bbox = get_box_form_pred_idx(self.pred_box[0], gt_idx, self.num_decode_views)
+
+        assign_result, self.query_cost = self.assigner.assign(pred_proj_cxcy, cls_score, visible_score, reid_score, idx_score, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore, cam_det_bboxes, gt_bbox, img_shape = img_shape)
         sampling_result = self.sampler.sample(assign_result, pred_proj_cxcy, gt_proj_cxcy)
         pos_inds = sampling_result.pos_inds
         neg_inds = sampling_result.neg_inds
@@ -1015,8 +1021,8 @@ class TMVReidHead(TMVDetHead):
                                 cv2.putText(img, cur_txt, (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 4, color, 3)
                                 mmcv.imwrite(img, save_path)
 
-                is_draw_gt_target = True
-                #is_draw_gt_target = 0
+                #is_draw_gt_target = True
+                is_draw_gt_target = 1
                 if is_draw_gt_target : 
                     draw_idx = target_idx
                     save_name = 'gt_target' 
@@ -1024,6 +1030,7 @@ class TMVReidHead(TMVDetHead):
                     cam_det_bboxes, cam_is_valids, cam_reid_scores, cam_det_cls, cam_det_scores, cam_preds_query = result_from_idx(draw_idx)
                     cam_is_valids[:] = 1
 
+                    '''
                     if self.loss_cross_attn_map is not None :
                         gt_idx = idx.reshape(self.num_query, self.num_decode_views) #(900, 3)
                         for i, (g, pr, at, at_sig, c) in enumerate(zip(gt_idx[target_idx].cpu().numpy(), pred_idx[target_idx].cpu().numpy(), cross_attn_map_pred_idx[target_idx].cpu().numpy(), cross_attn_map_sig[target_idx].cpu().detach().numpy(), cam_det_cls)) :
@@ -1038,14 +1045,17 @@ class TMVReidHead(TMVDetHead):
                             
                     #for (g, q, c) in zip(self.assigned_gt_idx[target_idx].cpu().numpy(), target_idx, cam_det_cls) :
                     #    print('gt', g, 'query', q, 'cls', c)
+                    '''
 
                     result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores, cam_preds_query)
                     show_result_mtv2d(data_root, cur_save_dir, result, 0, show_query=True) 
 
+                    '''
                     print('cam_det_bboxes')
                     print(cam_det_bboxes)
                     print('pred_idx score & idx')
                     print(idx_scores[draw_idx].sigmoid().max(-1))
+                    '''
 
                 is_draw_triplet =False 
                 #is_draw_gt_target = 0
@@ -1080,6 +1090,7 @@ class TMVReidHead(TMVDetHead):
                         cam_is_valids[:] = 1
                         result = (scene_id, gt_bbox, gt_is_valid, cam_gt_cls, cam_det_bboxes, cam_is_valids, cam_det_cls, cam_reid_scores, cam_preds_query)
                         show_result_mtv2d(data_root, cur_save_dir, result, 0, show_query=True) 
+                    3/0
 
                 #is_draw_gt = True
                 is_draw_gt = 0

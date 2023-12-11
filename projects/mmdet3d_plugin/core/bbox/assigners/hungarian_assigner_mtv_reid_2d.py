@@ -19,6 +19,7 @@ from mmdet.core.bbox.match_costs import build_match_cost
 from mmdet.models.utils.transformer import inverse_sigmoid
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox, denormalize_bbox
 from mmdet.core.bbox.iou_calculators import bbox_overlaps
+from projects.mmdet3d_plugin.core.bbox.util import cxcywh2x1y1x2y2
 
 try:
     from scipy.optimize import linear_sum_assignment
@@ -58,6 +59,8 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
                  reg_cost=dict(type='BBoxL1Cost', weight=1.0),
                  iou_cost=dict(type='IoUCost', weight=0.0),
                  query_cost=dict(type='QueryCost', weight=1.0),
+                 idx_cost=dict(type='ClassificationCost', weight=1.0),
+                 idx_cost_weight=0.0, 
                  align_with_loss=False,
                  pc_range=None, 
                  rep=1, 
@@ -67,12 +70,14 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
         self.reg_cost = build_match_cost(reg_cost)
         self.iou_cost = build_match_cost(iou_cost)
         self.query_cost = build_match_cost(query_cost)
+        self.idx_cost = build_match_cost(idx_cost)
         self.align_with_loss = align_with_loss
         self.pc_range = pc_range
         self.rep = rep
         self.valid_cost_thresh = valid_cost_thresh
+        self.idx_cost_weight = idx_cost_weight
 
-    def assign(self, norm_pred_cxcy, cls_pred, visible_pred, reid_pred, idx_pred, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore=None, eps=1e-7, img_shape=None):
+    def assign(self, norm_pred_cxcy, cls_pred, visible_pred, reid_pred, idx_pred, gt_proj_cxcy, gt_labels, gt_visibles, gt_idx, gt_bboxes_ignore=None, det_bbox_cxcywh=None, gt_bbox_cxcywh=None, eps=1e-7, img_shape=None):
         """Computes one-to-one matching based on the weighted costs.
         This method assign each query prediction to a ground truth or
         background. The `assigned_gt_inds` with -1 means don't care,
@@ -125,9 +130,31 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
             cost = cost.reshape(num_query, num_view, num_gts).transpose(0,2) #(900,3,50) -> (50,3,900)
             cost[gt_visibles==1] = 0
             cost = cost.sum(1).transpose(0,1) #(50,900)->(900,50)
-            cost = ( cost/ (gt_visibles==0).sum(-1)) #(900,50)
-            #cost = self.cls_cost(cls_pred, gt_labels) #(900, 3, 120), #(50,)
+            cls_cost = ( cost/ (gt_visibles==0).sum(-1)) #(900,50)
+            cost += cls_cost
             
+        if self.idx_cost.weight > 0 :
+            idx_cost = idx_pred.new_zeros((num_bboxes, num_view, num_gts)) #(900, 3, 50)
+            for i in range(num_view):
+                idx_cost[:, i] = self.idx_cost(idx_pred[:, i], gt_idx[:, i]) #(900, 300) #(50,) -> (900, 50)
+            idx_cost = idx_cost.transpose(0,2) #(50, 3, 900)
+            idx_cost[gt_visibles==1] = 0
+            idx_cost = idx_cost.sum(1).transpose(0,1) #(50,900)->(900,50)
+            idx_cost = ( idx_cost/ (gt_visibles==0).sum(-1)) #(900,50)
+            cost += idx_cost
+
+        if self.idx_cost_weight > 0 :
+            det_bbox = cxcywh2x1y1x2y2(det_bbox_cxcywh)
+            gt_bbox = cxcywh2x1y1x2y2(gt_bbox_cxcywh)
+
+            iou = det_bbox_cxcywh.new_zeros((num_gts, num_bboxes, num_view)) #(num_gt, 900, 3)
+            for i in range(num_view):
+                iou[..., i] = bbox_overlaps(gt_bbox[:, i], det_bbox[:, i]) #(num_gt, 4) #(900, 4) -> (num_gt, 900)
+            iou = iou.transpose(1,2)
+            iou[gt_visibles==1] = 0
+            iou_cost = 1 - ( iou.sum(1) / (gt_visibles==0).sum(-1).unsqueeze(-1)) #(50, 900)
+            cost = cost + self.idx_cost_weight * iou_cost.transpose(0,1)
+
         # visible_cost.
         #visible_cost = []
         #for i in range(gt_visibles.shape[-1]):

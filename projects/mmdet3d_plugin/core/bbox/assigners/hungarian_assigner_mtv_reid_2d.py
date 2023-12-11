@@ -123,9 +123,9 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
         # 2. compute the weighted costs
         cost = 0
 
+        num_query, num_view, num_cls = cls_pred.shape
         # classification and bboxcost.
         if self.cls_cost.weight > 0 :
-            num_query, num_view, num_cls = cls_pred.shape
             cost = self.cls_cost(cls_pred.reshape(num_query*num_view,num_cls), gt_labels) #(900*3, 120), #(50,) -> (900*3, 50)
             cost = cost.reshape(num_query, num_view, num_gts).transpose(0,2) #(900,3,50) -> (50,3,900)
             cost[gt_visibles==1] = 0

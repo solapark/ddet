@@ -59,7 +59,7 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
                  reg_cost=dict(type='BBoxL1Cost', weight=1.0),
                  iou_cost=dict(type='IoUCost', weight=0.0),
                  query_cost=dict(type='QueryCost', weight=1.0),
-                 idx_cost=dict(type='ClassificationCost', weight=1.0),
+                 idx_cost=dict(type='ClassificationCost', weight=0.0),
                  idx_cost_weight=0.0, 
                  align_with_loss=False,
                  pc_range=None, 
@@ -154,6 +154,7 @@ class HungarianAssignerMtvReid2D(BaseAssigner):
             iou[gt_visibles==1] = 0
             iou_cost = 1 - ( iou.sum(1) / (gt_visibles==0).sum(-1).unsqueeze(-1)) #(50, 900)
             cost = cost + self.idx_cost_weight * iou_cost.transpose(0,1)
+            #3/0
 
         # visible_cost.
         #visible_cost = []

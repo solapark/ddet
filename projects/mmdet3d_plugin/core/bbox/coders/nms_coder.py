@@ -31,8 +31,8 @@ class TMVDetNMSCoder(BaseBBoxCoder):
     """
 
     def __init__(self,
-                 pc_range,
                  num_views,
+                 pc_range=None,
                  voxel_size=None,
                  post_center_range=None,
                  max_num=100,

@@ -1998,7 +1998,7 @@ class MultiheadSVAttention(nn.MultiheadAttention):
         if self.key_softmax :
             attn = F.softmax(attn, dim=-2)
 
-        if self.scale_dot_type =='mean' or self.scale_dot_type =='pivot': 
+        if self.scale_dot_type in ['mean', 'pivot', 'max_pooling']: 
             attn = F.softmax(attn, dim=-1)
 
             if dropout_p > 0.0:
@@ -2011,6 +2011,8 @@ class MultiheadSVAttention(nn.MultiheadAttention):
             if self.scale_dot_type =='mean' : 
                 #output = output.mean(1).repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
                 output = output.mean(1, keepdim=True).repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
+            elif self.scale_dot_type =='max_pooling' : 
+                output = torch.max(output, 1, keepdim=True)[0].repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
 
             if self.scale_dot_type =='pivot' : 
                 output = output[:, :1].repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32) #first view to pivot

@@ -10,6 +10,7 @@
 # Copyright (c) OpenMMLab. All rights reserved.
 # ------------------------------------------------------------------------
 import torch
+from copy import deepcopy
 
 from mmdet.core.bbox import BaseBBoxCoder
 from mmdet.core.bbox.builder import BBOX_CODERS
@@ -348,12 +349,20 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
                  num_views=3,
                  reid_score_threshold=None,
                  cls_score_threshold=None,
+                 reid_sigmoid=True,
+                 H=None,
+                 W=None,
                 ):
         self.max_num = max_num
         self.num_views = num_views
         self.reid_score_threshold = reid_score_threshold
         self.cls_score_threshold = cls_score_threshold
         self.num_classes = num_classes
+        self.reid_sigmoid = reid_sigmoid
+        if not self.reid_sigmoid : 
+            self.pdist = torch.nn.PairwiseDistance(p=1)
+        self.H = H
+        self.W = W
         pass
 
     def encode(self):
@@ -373,7 +382,24 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         """
         max_num = self.max_num
 
-        reid_scores, indexs = reid_scores.sigmoid().topk(max_num) #(300,), #(300,)
+        if not self.reid_sigmoid :
+            Q = len(query2ds)
+            normalized_query2ds = deepcopy(query2ds) 
+            normalized_query2ds[..., 0] /= self.W
+            normalized_query2ds[..., 1] /= self.H
+            normalized_query2ds = normalized_query2ds.reshape(Q, -1)
+
+            normalized_bbox_preds = deepcopy(bbox_preds[..., :2]) 
+            normalized_bbox_preds[..., 0] /= self.W
+            normalized_bbox_preds[..., 1] /= self.H
+            normalized_bbox_preds = normalized_bbox_preds.reshape(Q, -1)
+
+            dist = self.pdist(normalized_query2ds, normalized_bbox_preds) #(900,)
+            reid_scores, indexs = (1/dist).topk(max_num) #(300,), #(300,)
+        else : 
+            reid_scores, indexs = reid_scores.sigmoid().topk(max_num) #(300,), #(300,)
+            #reid_scores = reid_scores.sigmoid() #(300,), #(300,)
+            #indexs = torch.where(reid_scores>-1)[0]
 
         soft_cls_scores, labels = F.softmax(cls_scores, dim=-1).max(-1) #(900,), #(900,)
         #soft_cls_scores, indexs = soft_cls_scores.view(-1).topk(max_num) #(300,), #(300,)

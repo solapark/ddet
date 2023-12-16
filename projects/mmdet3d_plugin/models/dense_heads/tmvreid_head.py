@@ -574,10 +574,13 @@ class TMVReidHead(TMVDetHead):
                 else :
                     cls_scores = cls_scores.transpose(2,3) #(6, 1, 900, 3, 120)
 
-                reid_scores = torch.stack(
-                    [reid_branch(output) for reid_branch, output in zip(self.reid_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
-                reid_scores = reid_scores[:, :, 0, :, 0] #(6, 1, 900)
-
+                if self.loss_reid is not None : 
+                    reid_scores = torch.stack(
+                        [reid_branch(output) for reid_branch, output in zip(self.reid_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
+                    reid_scores = reid_scores[:, :, 0, :, 0] #(6, 1, 900)
+                else :
+                    L, B, V, Q, D = det_outputs.shape #(6, 1, 3, 900, 256)
+                    reid_scores = det_outputs.new_ones((L, B, Q)) #(900, )
 
                 '''
                 #visible_scores = torch.stack(
@@ -681,12 +684,14 @@ class TMVReidHead(TMVDetHead):
         visible_weights[pos_inds] = 1.0
 
         # reid targets
-        reid_targets = torch.ones_like(reid_score, dtype=torch.long) #(900, ) #0=fg, 1=bg
-        reid_targets[pos_inds] = 0
-        reid_weights = reid_score.new_ones(num_bboxes) #(900, )
-        if self.tp_train_only : 
-            reid_weights[:] = 0.
-            reid_weights[pos_inds] = 1.0
+        reid_targets, reid_weights = None, None
+        if self.loss_reid is not None : 
+            reid_targets = torch.ones_like(reid_score, dtype=torch.long) #(900, ) #0=fg, 1=bg
+            reid_targets[pos_inds] = 0
+            reid_weights = reid_score.new_ones(num_bboxes) #(900, )
+            if self.tp_train_only : 
+                reid_weights[:] = 0.
+                reid_weights[pos_inds] = 1.0
 
         # idx targets
         idx_targets = gt_idx.new_full(visible_score.shape, self.num_input, dtype=torch.long) #(900, 3) = 300
@@ -725,7 +730,7 @@ class TMVReidHead(TMVDetHead):
                     visible_weights[pos_inds2] = 1.0
 
                     # reid targets
-                    reid_targets[pos_inds2] = 0
+                    if reid_targets is not None : reid_targets[pos_inds2] = 0
 
                 # idx targets
                 idx_targets[pos_inds2] = self.assigner2.assigned_rpn_idx[pos_inds2]
@@ -817,12 +822,12 @@ class TMVReidHead(TMVDetHead):
             dict[str, Tensor]: A dictionary of loss components for outputs from
                 a single decoder layer.
         """
-        loss_cls, loss_visible, loss_bbox, loss_seg, loss_self_attn_map, loss_cross_attn_map, loss_rpn, loss_det_output, loss_pos = None, None, None, None, None, None, None, None, None
+        loss_cls, loss_reid, loss_visible, loss_bbox, loss_seg, loss_self_attn_map, loss_cross_attn_map, loss_rpn, loss_det_output, loss_pos = None, None, None, None, None, None, None, None, None, None
         if cls_scores is not None:
             num_imgs = cls_scores.size(0) #1
             cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
             visible_scores_list = [visible_scores[i] for i in range(num_imgs)]
-            reid_scores_list = [reid_scores[i] for i in range(num_imgs)]
+            reid_scores_list = [reid_scores[i] for i in range(num_imgs)] if self.loss_reid is not None else [None]*num_imgs
             idx_scores_list = [idx_scores[i] for i in range(num_imgs)]
             #bbox_preds_list = [bbox_preds[i] for i in range(num_imgs)]
             bbox_preds_list = [None for i in range(num_imgs)]
@@ -832,12 +837,14 @@ class TMVReidHead(TMVDetHead):
             label_weights = torch.cat(label_weights_list, 0)
             visibles = torch.cat(visibles_list, 0)
             visible_weights = torch.cat(visible_weights_list, 0)
-            reids = torch.cat(reid_list, 0)
-            reid_weights = torch.cat(reid_weights_list, 0)
             idx = torch.cat(idx_list, 0)
             idx_weights = torch.cat(idx_weights_list, 0)
             bbox_targets = torch.cat(bbox_targets_list, 0)
             bbox_weights = torch.cat(bbox_weights_list, 0)
+
+            if self.loss_reid is not None :
+                reids = torch.cat(reid_list, 0)
+                reid_weights = torch.cat(reid_weights_list, 0)
 
             # visible loss
             visible_scores = visible_scores.reshape(-1, self.num_decode_views) #(900, 3)
@@ -873,10 +880,12 @@ class TMVReidHead(TMVDetHead):
                 loss_cls = self.loss_cls(cls_scores, labels, label_weights, avg_factor=cls_avg_factor)
 
             # reid loss
-            reid_scores = reid_scores.reshape(-1, self.reid_out_channels) #(900, 1)
-            # construct weighted avg_factor to match with the official DETR repo
-            reid_avg_factor = visible_cls_avg_factor
-            loss_reid = self.loss_reid(reid_scores, reids, reid_weights, avg_factor=reid_avg_factor)
+            if self.loss_reid is not None : 
+                reid_scores = reid_scores.reshape(-1, self.reid_out_channels) #(900, 1)
+                # construct weighted avg_factor to match with the official DETR repo
+                reid_avg_factor = visible_cls_avg_factor
+                loss_reid = self.loss_reid(reid_scores, reids, reid_weights, avg_factor=reid_avg_factor)
+                loss_reid = torch.nan_to_num(loss_reid)
 
             # idx loss
             idx_scores_org = idx_scores.reshape(idx_scores.shape)
@@ -1104,7 +1113,6 @@ class TMVReidHead(TMVDetHead):
 
             loss_cls = torch.nan_to_num(loss_cls)
             loss_visible = torch.nan_to_num(loss_visible)
-            loss_reid = torch.nan_to_num(loss_reid)
             loss_idx = torch.nan_to_num(loss_idx)
             loss_bbox = 0
             #loss_bbox = torch.nan_to_num(loss_bbox)
@@ -1235,9 +1243,10 @@ class TMVReidHead(TMVDetHead):
                 # loss from the last decoder layer
                 loss_dict['loss_cls'] = losses_cls[-1]
                 loss_dict['loss_visible'] = losses_visible[-1]
-                loss_dict['loss_reid'] = losses_reid[-1]
                 loss_dict['loss_idx'] = losses_idx[-1]
                 #loss_dict['loss_bbox'] = losses_bbox[-1]
+                if losses_reid[0] is not None:
+                    loss_dict['loss_reid'] = losses_reid[-1]
                 if losses_self_attn_map[0] is not None:
                     loss_dict['loss_self_attn_map'] = losses_self_attn_map[-1]
                 if losses_cross_attn_map[0] is not None:
@@ -1252,12 +1261,13 @@ class TMVReidHead(TMVDetHead):
                 # loss from other decoder layers
                 num_dec_layer = 0
                 #for loss_cls_i, loss_visible_i, loss_bbox_i in zip(losses_cls[:-1], losses_visible[:-1], losses_bbox[:-1]):
-                for loss_cls_i, loss_visible_i, loss_reid_i, loss_idx_i in zip(losses_cls[:-1], losses_visible[:-1], losses_reid[:-1], losses_idx[:-1]):
+                for loss_cls_i, loss_visible_i, loss_idx_i in zip(losses_cls[:-1], losses_visible[:-1], losses_idx[:-1]):
                     loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
                     loss_dict[f'd{num_dec_layer}.loss_visible'] = loss_visible_i
-                    loss_dict[f'd{num_dec_layer}.loss_reid'] = loss_reid_i
                     loss_dict[f'd{num_dec_layer}.loss_idx'] = loss_idx_i
                     #loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
+                    if losses_reid[0] is not None:
+                        loss_dict[f'd{num_dec_layer}.loss_reid'] = losses_reid[num_dec_layer]
                     if losses_self_attn_map[0] is not None:
                         loss_dict[f'd{num_dec_layer}.loss_self_attn_map'] = losses_self_attn_map[num_dec_layer]
                     if losses_cross_attn_map[0] is not None:

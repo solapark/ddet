@@ -8,6 +8,7 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing import Optional, Tuple
 import math
+import copy
 
 from mmcv.cnn.bricks.transformer import (BaseTransformerLayer, TransformerLayerSequence,
                                          build_transformer_layer_sequence)
@@ -294,7 +295,14 @@ class TMVReidTransformerDecoderLayer(BaseTransformerLayer):
                  ffn_num_fcs=2,
                  with_cp=True,
                  attn_to_next_layer=None,
+                 num_views=None,
                  **kwargs):
+        operation_order_org = copy.deepcopy(operation_order)
+        if 'avg' in operation_order :
+            operation_order = list(operation_order)
+            operation_order.remove('avg')
+            operation_order = tuple(operation_order)
+
         super(TMVReidTransformerDecoderLayer, self).__init__(
             attn_cfgs=attn_cfgs,
             feedforward_channels=feedforward_channels,
@@ -312,6 +320,8 @@ class TMVReidTransformerDecoderLayer(BaseTransformerLayer):
         else :
             self.attn_to_next_layer = [True]*self.num_attn
         self.attn_type = [st for st in operation_order if st in ['self_attn', 'cross_attn']]
+        self.operation_order = operation_order_org
+        self.num_views = num_views
 
     def _forward(
         self,
@@ -400,6 +410,10 @@ class TMVReidTransformerDecoderLayer(BaseTransformerLayer):
                 query = self.ffns[ffn_index](
                     query, identity if self.pre_norm else None)
                 ffn_index += 1
+
+            elif layer == 'avg':
+                QV,B,E = query.shape
+                query = query.reshape(self.num_views, -1, B, E).mean(0, keepdim=True).repeat(self.num_views,1,1,1).reshape(QV,B,E)
 
         return query, self_attn_map, cross_attn_map
 

@@ -635,6 +635,8 @@ class TMVReidMultiheadCrossAttention(BaseModule):
                  init_cfg=None,
                  batch_first=False,
                  attention=None,
+                 idt_is_mean=False,
+                 num_views=3,
                  **kwargs):
         super(TMVReidMultiheadCrossAttention, self).__init__(init_cfg)
         if 'dropout' in kwargs:
@@ -649,6 +651,8 @@ class TMVReidMultiheadCrossAttention(BaseModule):
         self.embed_dims = embed_dims
         self.num_heads = num_heads
         self.batch_first = batch_first
+        self.idt_is_mean = idt_is_mean
+        self.num_views = num_views
 
         if kdim is None:
             kdim = embed_dims
@@ -729,6 +733,9 @@ class TMVReidMultiheadCrossAttention(BaseModule):
             key = query
         if value is None:
             value = key
+        if self.idt_is_mean :
+            QV,B,E = query.shape
+            identity = query.reshape(self.num_views, -1, B, E).mean(0, keepdim=True).repeat(self.num_views,1,1,1).reshape(QV,B,E)
         if identity is None:
             identity = query
         if key_pos is None:

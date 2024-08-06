@@ -2013,7 +2013,7 @@ class MultiheadSVAttention(nn.MultiheadAttention):
         k = k.reshape(B, self.num_views, self.num_key, E).reshape(-1, self.num_key, E) #(8*3, 300, 32) 
         attn = torch.bmm(q, k.transpose(-2, -1)) #(8*3, 900, 300)
 
-        if self.scale_dot_type =='mean' or self.scale_dot_type =='pivot': 
+        if self.scale_dot_type in ['mean', 'pivot', 'max']: 
             attn = F.softmax(attn, dim=-1)
 
             if dropout_p > 0.0:
@@ -2027,7 +2027,10 @@ class MultiheadSVAttention(nn.MultiheadAttention):
                 #output = output.mean(1).repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
                 output = output.mean(1, keepdim=True).repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
 
-            if self.scale_dot_type =='pivot' : 
+            elif self.scale_dot_type =='max' : 
+                output = output.max(1, keepdim=True)[0].repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32)
+
+            elif self.scale_dot_type =='pivot' : 
                 output = output[:, :1].repeat(1, self.num_views, 1, 1) #(B, 3, 900, 32) #first view to pivot
 
         elif self.scale_dot_type =='wgt_mean' : 

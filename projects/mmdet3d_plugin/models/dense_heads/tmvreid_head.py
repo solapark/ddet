@@ -61,6 +61,7 @@ class TMVReidHead(TMVDetHead):
 
     def __init__(self,
                  in_channels,
+                 vis_is_idx=False,
                  pos_emb_sig=False,
                  pos_emb_cxcy_only=False,
                  cross_attn2=False,
@@ -153,6 +154,7 @@ class TMVReidHead(TMVDetHead):
         self.pos_encoding = pos_encoding
         self.pos_emb_cxcy_only = pos_emb_cxcy_only
         self.pos_emb_sig=pos_emb_sig
+        self.vis_is_idx=vis_is_idx
 
         if self.cross_attn2 :
             self.include_attn_map = True 
@@ -398,19 +400,20 @@ class TMVReidHead(TMVDetHead):
             else:
                 self.idx_branch = nn.ModuleList([deepcopy(idx_branch) for _ in range(num_layers)])
 
-        visible_branch = []
-        for lyr, (in_channel, out_channel) in enumerate(
-                zip([self.output_det_2d_encoding.embed_dim] + visible_hidden_dims,
-                    visible_hidden_dims + [self.visible_out_channels])):
-            visible_branch.append(nn.Linear(in_channel, out_channel))
-            if lyr < len(visible_hidden_dims):
-                visible_branch.append(nn.LayerNorm(out_channel))
-                visible_branch.append(nn.ReLU(inplace=True))
-        visible_branch = nn.Sequential(*visible_branch)
-        if shared_head:
-            self.visible_branch = nn.ModuleList([visible_branch for _ in range(num_layers)])
-        else:
-            self.visible_branch = nn.ModuleList([deepcopy(visible_branch) for _ in range(num_layers)])
+        if not self.vis_is_idx :
+            visible_branch = []
+            for lyr, (in_channel, out_channel) in enumerate(
+                    zip([self.output_det_2d_encoding.embed_dim] + visible_hidden_dims,
+                        visible_hidden_dims + [self.visible_out_channels])):
+                visible_branch.append(nn.Linear(in_channel, out_channel))
+                if lyr < len(visible_hidden_dims):
+                    visible_branch.append(nn.LayerNorm(out_channel))
+                    visible_branch.append(nn.ReLU(inplace=True))
+            visible_branch = nn.Sequential(*visible_branch)
+            if shared_head:
+                self.visible_branch = nn.ModuleList([visible_branch for _ in range(num_layers)])
+            else:
+                self.visible_branch = nn.ModuleList([deepcopy(visible_branch) for _ in range(num_layers)])
 
     def init_weights(self):
         """Initialize weights of the transformer head."""
@@ -521,10 +524,6 @@ class TMVReidHead(TMVDetHead):
                 else :
                     cls_scores = cls_scores.transpose(2,3) #(6, 1, 900, 3, 120)
 
-                visible_scores = torch.stack(
-                    [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
-                visible_scores = visible_scores[..., 0].transpose(2, 3) #(6, 1, 900, 3)
-
                 reid_scores = torch.stack(
                     [reid_branch(output) for reid_branch, output in zip(self.reid_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
                 reid_scores = reid_scores[:, :, 0, :, 0] #(6, 1, 900)
@@ -547,6 +546,15 @@ class TMVReidHead(TMVDetHead):
                         idx_scores = torch.stack(
                             [idx_branch(output) for idx_branch, output in zip(self.idx_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 300)
                         idx_scores = idx_scores.transpose(2, 3) #(6, 1, 900, 3, 300)
+
+                if self.vis_is_idx : 
+                    visible_scores, _ = idx_scores.max(-1) #(6, 1, 900, 3)
+
+                else : 
+                    visible_scores = torch.stack(
+                        [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
+                    visible_scores = visible_scores[..., 0].transpose(2, 3) #(6, 1, 900, 3)
+
 
                 '''
                 #visible_scores = torch.stack(
@@ -814,7 +822,10 @@ class TMVReidHead(TMVDetHead):
                 visible_cls_avg_factor = reduce_mean(visible_scores.new_tensor([visible_cls_avg_factor]))
 
             visible_cls_avg_factor = max(visible_cls_avg_factor, 1)
-            loss_visible = self.loss_visible(visible_scores.reshape(-1,1), visibles.reshape(-1,), visible_weights.reshape(-1,), avg_factor=visible_cls_avg_factor)
+
+            if self.loss_visible is not None:
+                loss_visible = self.loss_visible(visible_scores.reshape(-1,1), visibles.reshape(-1,), visible_weights.reshape(-1,), avg_factor=visible_cls_avg_factor)
+                loss_visible = torch.nan_to_num(loss_visible)
 
             # classification loss cls_scores #(1, 900, 3, 120)
             if self.all_view_cls_train :
@@ -1061,7 +1072,6 @@ class TMVReidHead(TMVDetHead):
                     show_result_mtv2d(data_root, cur_save_dir, result, 0, show_pred=False, show_gt=True) 
 
             loss_cls = torch.nan_to_num(loss_cls)
-            loss_visible = torch.nan_to_num(loss_visible)
             loss_reid = torch.nan_to_num(loss_reid)
             loss_idx = torch.nan_to_num(loss_idx)
             loss_bbox = 0
@@ -1192,10 +1202,11 @@ class TMVReidHead(TMVDetHead):
             if losses_cls is not None:
                 # loss from the last decoder layer
                 loss_dict['loss_cls'] = losses_cls[-1]
-                loss_dict['loss_visible'] = losses_visible[-1]
                 loss_dict['loss_reid'] = losses_reid[-1]
                 loss_dict['loss_idx'] = losses_idx[-1]
                 #loss_dict['loss_bbox'] = losses_bbox[-1]
+                if losses_visible[0] is not None:
+                    loss_dict['loss_visible'] = losses_visible[-1]
                 if losses_self_attn_map[0] is not None:
                     loss_dict['loss_self_attn_map'] = losses_self_attn_map[-1]
                 if losses_cross_attn_map[0] is not None:
@@ -1210,12 +1221,13 @@ class TMVReidHead(TMVDetHead):
                 # loss from other decoder layers
                 num_dec_layer = 0
                 #for loss_cls_i, loss_visible_i, loss_bbox_i in zip(losses_cls[:-1], losses_visible[:-1], losses_bbox[:-1]):
-                for loss_cls_i, loss_visible_i, loss_reid_i, loss_idx_i in zip(losses_cls[:-1], losses_visible[:-1], losses_reid[:-1], losses_idx[:-1]):
+                for loss_cls_i, loss_reid_i, loss_idx_i in zip(losses_cls[:-1], losses_reid[:-1], losses_idx[:-1]):
                     loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
-                    loss_dict[f'd{num_dec_layer}.loss_visible'] = loss_visible_i
                     loss_dict[f'd{num_dec_layer}.loss_reid'] = loss_reid_i
                     loss_dict[f'd{num_dec_layer}.loss_idx'] = loss_idx_i
                     #loss_dict[f'd{num_dec_layer}.loss_bbox'] = loss_bbox_i
+                    if losses_visible[0] is not None:
+                        loss_dict[f'd{num_dec_layer}.loss_visible'] = losses_visible[num_dec_layer]
                     if losses_self_attn_map[0] is not None:
                         loss_dict[f'd{num_dec_layer}.loss_self_attn_map'] = losses_self_attn_map[num_dec_layer]
                     if losses_cross_attn_map[0] is not None:

@@ -1175,5 +1175,6 @@ class LoadMultiviewTargets(object):
             results['gt_bboxes_3d'].mtv_targets_proj_cxcy = torch.as_tensor(inst_proj_2dp_all) #(num_targets, num_views)
             results['gt_bboxes_3d'].mtv_targets_idx = torch.as_tensor(pred_box_idx_all) #(num_targets, num_views)
         results['dec_extrinsics'] = dec_extrinsics
+        results['inst_3dp'] = torch.as_tensor(results['inst_3dp']) #(num_targets, num_views)
 
         return results

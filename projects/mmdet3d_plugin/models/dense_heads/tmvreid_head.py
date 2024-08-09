@@ -61,6 +61,7 @@ class TMVReidHead(TMVDetHead):
 
     def __init__(self,
                  in_channels,
+                 inst3dp2query=False,
                  pos_emb_sig=False,
                  pos_emb_cxcy_only=False,
                  cross_attn2=False,
@@ -153,6 +154,7 @@ class TMVReidHead(TMVDetHead):
         self.pos_encoding = pos_encoding
         self.pos_emb_cxcy_only = pos_emb_cxcy_only
         self.pos_emb_sig=pos_emb_sig
+        self.inst3dp2query=inst3dp2query
 
         if self.cross_attn2 :
             self.include_attn_map = True 
@@ -485,6 +487,14 @@ class TMVReidHead(TMVDetHead):
         cls_scores, bbox_preds, seg_scores = None, None, None
         if self.det_transformer is not None:
             init_det_points = self.query_points.repeat(batch_size, 1, 1, 1) if self.query_points is not None else None #(1, 1, 900, 3) #xyz in world_coord
+            if self.inst3dp2query : 
+                rg = self.pc_range
+                divider = torch.tensor([rg[3] - rg[0], rg[4] - rg[1], rg[5] - rg[2]], device=init_det_points.device)
+                subtract = torch.tensor([rg[0], rg[1], rg[2]], device=init_det_points.device)
+                gt_sz = img_metas[0]['inst_3dp'].shape[0]
+                init_det_points[0, 0, :gt_sz] = img_metas[0]['inst_3dp']
+                init_det_points = (init_det_points - subtract) / divider 
+                init_det_points[0, 0, gt_sz:] = -10000
 
             # transform query points to local viewpoints
             init_det_points_mtv, query3d_denorm = self.get_mtv_points_local(init_det_points, img_metas) #(1, 3, 900, 3) xyz in cam_coord #(1, 1, 900, 3)
@@ -984,8 +994,8 @@ class TMVReidHead(TMVDetHead):
                                 cv2.putText(img, cur_txt, (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 4, color, 3)
                                 mmcv.imwrite(img, save_path)
 
-                is_draw_gt_target = True
-                #is_draw_gt_target = 0
+                #is_draw_gt_target = True
+                is_draw_gt_target = 0
                 if is_draw_gt_target : 
                     draw_idx = target_idx
                     save_name = 'gt_target' 

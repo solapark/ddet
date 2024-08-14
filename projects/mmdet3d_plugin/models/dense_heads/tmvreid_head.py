@@ -61,6 +61,7 @@ class TMVReidHead(TMVDetHead):
 
     def __init__(self,
                  in_channels,
+                 rpn2dp2query=False,
                  inst3dp2query=False,
                  pos_emb_sig=False,
                  pos_emb_cxcy_only=False,
@@ -155,6 +156,7 @@ class TMVReidHead(TMVDetHead):
         self.pos_emb_cxcy_only = pos_emb_cxcy_only
         self.pos_emb_sig=pos_emb_sig
         self.inst3dp2query=inst3dp2query
+        self.rpn2dp2query=rpn2dp2query
 
         if self.cross_attn2 :
             self.include_attn_map = True 
@@ -487,14 +489,27 @@ class TMVReidHead(TMVDetHead):
         cls_scores, bbox_preds, seg_scores = None, None, None
         if self.det_transformer is not None:
             init_det_points = self.query_points.repeat(batch_size, 1, 1, 1) if self.query_points is not None else None #(1, 1, 900, 3) #xyz in world_coord
-            if self.inst3dp2query : 
+            if self.inst3dp2query or self.rpn2dp2query : 
                 rg = self.pc_range
                 divider = torch.tensor([rg[3] - rg[0], rg[4] - rg[1], rg[5] - rg[2]], device=init_det_points.device)
                 subtract = torch.tensor([rg[0], rg[1], rg[2]], device=init_det_points.device)
-                gt_sz = img_metas[0]['inst_3dp'].shape[0]
-                init_det_points[0, 0, :gt_sz] = img_metas[0]['inst_3dp']
-                init_det_points = (init_det_points - subtract) / divider 
-                init_det_points[0, 0, gt_sz:] = -10000
+
+                if self.inst3dp2query : 
+                    gt_sz = img_metas[0]['inst_3dp'].shape[0]
+                    init_det_points[0, 0, :gt_sz] = img_metas[0]['inst_3dp']
+                    init_det_points = (init_det_points - subtract) / divider 
+                    init_det_points[0, 0, gt_sz:] = -10000
+
+                if self.rpn2dp2query :
+                    #Convert 2D RP coordinates to 3D world coordinates with sampled z in [0, 1].
+                    rp_x1y1x2y2 = init_det_points.new_tensor([img_meta['rpn_x1y1x2y2'] for img_meta in img_metas])
+                    rp_cx = (rp_x1y1x2y2[:,:,:,0]+rp_x1y1x2y2[:,:,:,2])/2
+                    rp_cy = (rp_x1y1x2y2[:,:,:,1]+rp_x1y1x2y2[:,:,:,3])/2
+                    rp_cxcy = torch.stack([rp_cx, rp_cy], -1) 
+                    rp_cxcy = rp_cxcy.permute(0, 2, 1, 3)
+                    cam_points = self.img2cam(rp_cxcy, img_metas)
+                    world_coords = self.cam2world(cam_points, img_metas).reshape(1, 1, -1, 3)
+                    init_det_points = (world_coords - subtract) / divider 
 
             # transform query points to local viewpoints
             init_det_points_mtv, query3d_denorm = self.get_mtv_points_local(init_det_points, img_metas) #(1, 3, 900, 3) xyz in cam_coord #(1, 1, 900, 3)
@@ -1319,6 +1334,62 @@ class TMVReidHead(TMVDetHead):
         init_det_points_mtv = (init_det_points_mtv - subtract) / (divider + 1e-6)
 
         return init_det_points_mtv, init_det_points
+
+    def img2cam(self, img_points, img_metas):
+        """
+        Convert 2D image coordinates to normalized camera coordinates.
+        """
+        intrinsics = img_points.new_tensor([img_meta['intrinsics'] for img_meta in img_metas])
+        B, V, M, _ = img_points.shape  # Batch, Views, Points, 2
+        
+        # Normalize points for intrinsic transformation
+        img_points_homog = torch.cat([img_points, torch.ones_like(img_points[..., :1])], dim=-1)  # (B, V, M, 3)
+        
+        intrinsics_inv = torch.inverse(intrinsics[:, :V, :3, :3])  # (B, V, 3, 3)
+        K_inv = intrinsics_inv[:, :, None, :, :].repeat(1, 1, M, 1, 1)  # (B, V, M, 3, 3)
+        
+        cam_points = torch.matmul(K_inv, img_points_homog[..., None]).squeeze(-1)  # (B, V, M, 3)
+        
+        return cam_points
+
+    def cam2world(self, cam_points, img_metas):
+        """
+        Reproject the camera coordinates to the world coordinates with sampled z in [0, 1].
+        """
+        extrinsics = cam_points.new_tensor([img_meta['dec_extrinsics'] for img_meta in img_metas])
+        B, V, M, _ = cam_points.shape
+
+        world_coords = []
+
+        for b in range(B):
+            for v in range(V):
+                R = extrinsics[b, v, :3, :3]
+                T = extrinsics[b, v, :3, 3]
+                
+                cam_point = cam_points[b, v, :, :]  # (M, 3)
+                
+                # Calculate the ray direction in world coordinates
+                ray_dir = torch.matmul(R, cam_point.t()).t()  # (M, 3)
+                
+                # Sample z in range [z0, z1]
+                rg = self.pc_range
+                sampled_z = (rg[5] - rg[2]) * torch.rand(M, device=cam_points.device) + rg[2]
+                #sampled_z = .25 * torch.rand(M, device=cam_points.device)
+                sampled_z[:] = 0.
+                
+                # Calculate corresponding t for the sampled z
+                t = (sampled_z - T[2]) / ray_dir[:, 2]
+                
+                # Compute the world coordinates using the sampled t
+                world_point = T[:2] + t[:, None] * ray_dir[:, :2]
+                
+                # Combine with the sampled z to form the 3D world coordinate
+                world_point = torch.cat([world_point, sampled_z[:, None]], dim=1)  # (M, 3)
+                
+                world_coords.append(world_point)
+
+        world_coords = torch.stack(world_coords, dim=1)  # (B, V, M, 3)
+        return world_coords
 
     def add_pose_info(self, init_det_points, init_det_points_mtv, img_metas):
         imgH, imgW, _, _ = img_metas[0]['ori_shape']

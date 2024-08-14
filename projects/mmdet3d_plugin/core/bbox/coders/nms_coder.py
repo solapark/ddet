@@ -16,6 +16,7 @@ from mmdet.core.bbox import BaseBBoxCoder
 from mmdet.core.bbox.builder import BBOX_CODERS
 from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox, cxcywh2x1y1x2y2, x1y1x2y22cxcywh
 import torch.nn.functional as F
+from projects.mmdet3d_plugin.core.bbox.coders.nms_free_coder import TMVReidNMSFreeCoder
 
 @BBOX_CODERS.register_module()
 class TMVDetNMSCoder(BaseBBoxCoder):
@@ -117,7 +118,7 @@ class TMVDetNMSCoder(BaseBBoxCoder):
         boxes3d = boxes3d[:, 1:, [0, 1, 3, 5]] #(300, num_views, 4) #cxcywh
         boxes3d = cxcywh2x1y1x2y2(boxes3d) 
 
-        boxes3d, scores, visibles, labels = self.nms_classwise(boxes3d, scores, visibles, labels, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
+        boxes3d, scores, visibles, labels = self.nms_classwise(boxes3d, scores, labels, visibles, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
         
         boxes3d = x1y1x2y22cxcywh(boxes3d) #(N, num_views, 4)
         num_bbox = len(boxes3d)
@@ -151,116 +152,153 @@ class TMVDetNMSCoder(BaseBBoxCoder):
             predictions_list.append(self.decode_single(all_cls_scores[i], all_visible_scores[i], all_bbox_preds[i]))
         return predictions_list
 
-    def nms(self, boxes, probs, is_valids, emb_dists=None, overlap_thresh=0.9, max_boxes=300):
-        # boxes : (num_box, num_cam, 4)
-        # probs : (num_box, )
-        # is_valids : (num_box, num_cam)
-        # code used from here: http://www.pyimagesearch.com/2015/02/16/faster-non-maximum-suppression-python/
-        # if there are no boxes, return an empty list
 
-        # Process explanation:
-        #   Step 1: Sort the probs list
-        #   Step 2: Find the larget prob 'Last' in the list and save it to the pick list
-        #   Step 3: Calculate the IoU with 'Last' box and other boxes in the list. If the IoU is larger than overlap_threshold, delete the box from list
-        #   Step 4: Repeat step 2 and step 3 until there is no item in the probs list 
-        if len(boxes) == 0:
-            return []
+@BBOX_CODERS.register_module()
+class TMVReidNMSCoder(TMVReidNMSFreeCoder):
+    def __init__(self,
+                 max_num=300,
+                 num_classes=120,
+                 num_views=3,
+                 reid_score_threshold=None,
+                 cls_score_threshold=None,
+                 visible_score_threshold=None,
+                 class_agnostic=False,
+                 overlap_thresh=.9):
+        super().__init__(max_num, num_classes, num_views, reid_score_threshold, cls_score_threshold)
+        self.overlap_thresh = overlap_thresh
+        self.visible_threshold = visible_score_threshold
+        self.class_agnostic = class_agnostic
 
-        #boxes[np.where(boxes<0)] = 0
-        boxes[boxes < 0] = 0
-        # grab the coordinates of the bounding boxes
-        x1 = boxes[:, :, 0] #(num_box, num_cam)
-        y1 = boxes[:, :, 1]
-        x2 = boxes[:, :, 2]
-        y2 = boxes[:, :, 3]
+    def decode_single(self, cls_scores, reid_scores, visible_scores, bbox_preds, query2ds):
+        predictions_dict = super().decode_single(cls_scores, reid_scores, visible_scores, bbox_preds, query2ds)
+        boxes3d = predictions_dict['bboxes']
+        reid_scores = predictions_dict['reid_scores']
+        cls_scores = predictions_dict['cls_scores']
+        visibles = predictions_dict['visibles']
+        labels = predictions_dict['labels']
+        query2ds = predictions_dict['query2ds']
 
-        #np.testing.assert_array_less(x1, x2)
-        #np.testing.assert_array_less(y1, y2)
+        visibles = visibles > self.visible_threshold
+        boxes3d = cxcywh2x1y1x2y2(boxes3d) 
 
-        # if the bounding boxes integers, convert them to floats --
-        # this is important since we'll be doing a bunch of divisions
-        #if boxes.dtype.kind == "i":
-        #    boxes = boxes.astype("float")
-
-        # initialize the list of picked indexes 
-        pick = []
-
-        # calculate the areas 
-        area = (x2 - x1) * (y2 - y1) #(num_box, num_cam)
-
-        # sort the bounding boxes 
-        #idxs = np.argsort(probs) #(num_box,)
-        _, idxs = torch.sort(probs)
-        idxs = idxs.cpu().numpy()
-
-        while len(idxs) > 0:
-            last = len(idxs) - 1
-            i = idxs[last]
-            pick.append(i)
-
-            xx1_int = torch.maximum(x1[i], x1[idxs[:last]])
-            yy1_int = torch.maximum(y1[i], y1[idxs[:last]])
-            xx2_int = torch.minimum(x2[i], x2[idxs[:last]])
-            yy2_int = torch.minimum(y2[i], y2[idxs[:last]])
-
-            ww_int = torch.maximum(torch.zeros_like(xx1_int), xx2_int - xx1_int)
-            hh_int = torch.maximum(torch.zeros_like(yy1_int), yy2_int - yy1_int)
-
-            area_int = ww_int * hh_int
-
-            area_union = area[i] + area[idxs[:last]] - area_int
-
-            overlap = area_int / (area_union + 1e-6)
-            overlap = overlap.cpu().numpy()
-
-            # delete all indexes from the index list that have
-            idxs = np.delete(idxs, np.concatenate(([last],
-                #np.where(np.all(overlap > overlap_thresh, 1))[0])))
-                #np.where(np.any(overlap > overlap_thresh, 1))[0])))
-                #np.where(np.sum(overlap > overlap_thresh, 1) > 1)[0])))
-                np.where(np.sum(overlap > overlap_thresh, 1) > 0)[0])))
-
-            if len(pick) >= max_boxes:
-                break
-
-        boxes = boxes[pick]
-        is_valids = is_valids[pick]
-        if emb_dists is not None:
-            emb_dists = emb_dists[pick]
-        probs = probs[pick]
-
-        if emb_dists is not None:
-            return boxes, probs, is_valids, emb_dists
-        else:
-            return boxes, probs, is_valids
-
-    def nms_classwise(self, boxes, scores, visibles, labels, overlap_thresh=0.9, max_boxes=300):
-        unique_labels = torch.unique(labels)  # Get unique class labels
+        if self.class_agnostic : 
+            boxes3d, cls_scores, [reid_scores, visibles, query2ds, labels] = nms(boxes3d, cls_scores, [reid_scores, visibles, query2ds, labels], overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
+            # for align
+            boxes3d, cls_scores, [reid_scores, visibles, query2ds], labels = nms_classwise(boxes3d, cls_scores, [reid_scores, visibles, query2ds], labels, overlap_thresh=1.5, max_boxes=self.max_num) 
+        else : 
+            boxes3d, cls_scores, [reid_scores, visibles, query2ds], labels = nms_classwise(boxes3d, cls_scores, [reid_scores, visibles, query2ds], labels, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
         
-        final_boxes = []
-        final_scores = []
-        final_visibles = []
-        final_labels = []
+        boxes3d = x1y1x2y22cxcywh(boxes3d) #(N, num_views, 4)
+ 
+        predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'cls_scores': cls_scores, 'visibles': visibles, 'labels': labels, 'query2ds': query2ds}
+        return predictions_dict
+
+def nms(boxes, probs, side_infos, overlap_thresh=0.9, max_boxes=300):
+    # boxes : (num_box, num_cam, 4)
+    # probs : (num_box, )
+    # is_valids : (num_box, num_cam)
+    # code used from here: http://www.pyimagesearch.com/2015/02/16/faster-non-maximum-suppression-python/
+    # if there are no boxes, return an empty list
+
+    # Process explanation:
+    #   Step 1: Sort the probs list
+    #   Step 2: Find the larget prob 'Last' in the list and save it to the pick list
+    #   Step 3: Calculate the IoU with 'Last' box and other boxes in the list. If the IoU is larger than overlap_threshold, delete the box from list
+    #   Step 4: Repeat step 2 and step 3 until there is no item in the probs list 
+    if len(boxes) == 0:
+        return []
+
+    #boxes[np.where(boxes<0)] = 0
+    boxes[boxes < 0] = 0
+    # grab the coordinates of the bounding boxes
+    x1 = boxes[:, :, 0] #(num_box, num_cam)
+    y1 = boxes[:, :, 1]
+    x2 = boxes[:, :, 2]
+    y2 = boxes[:, :, 3]
+
+    #np.testing.assert_array_less(x1, x2)
+    #np.testing.assert_array_less(y1, y2)
+
+    # if the bounding boxes integers, convert them to floats --
+    # this is important since we'll be doing a bunch of divisions
+    #if boxes.dtype.kind == "i":
+    #    boxes = boxes.astype("float")
+
+    # initialize the list of picked indexes 
+    pick = []
+
+    # calculate the areas 
+    area = (x2 - x1) * (y2 - y1) #(num_box, num_cam)
+
+    # sort the bounding boxes 
+    #idxs = np.argsort(probs) #(num_box,)
+    _, idxs = torch.sort(probs)
+    idxs = idxs.cpu().numpy()
+
+    while len(idxs) > 0:
+        last = len(idxs) - 1
+        i = idxs[last]
+        pick.append(i)
+
+        xx1_int = torch.maximum(x1[i], x1[idxs[:last]])
+        yy1_int = torch.maximum(y1[i], y1[idxs[:last]])
+        xx2_int = torch.minimum(x2[i], x2[idxs[:last]])
+        yy2_int = torch.minimum(y2[i], y2[idxs[:last]])
+
+        ww_int = torch.maximum(torch.zeros_like(xx1_int), xx2_int - xx1_int)
+        hh_int = torch.maximum(torch.zeros_like(yy1_int), yy2_int - yy1_int)
+
+        area_int = ww_int * hh_int
+
+        area_union = area[i] + area[idxs[:last]] - area_int
+
+        overlap = area_int / (area_union + 1e-6)
+        overlap = overlap.cpu().numpy()
+
+        # delete all indexes from the index list that have
+        idxs = np.delete(idxs, np.concatenate(([last],
+            #np.where(np.all(overlap > overlap_thresh, 1))[0])))
+            #np.where(np.any(overlap > overlap_thresh, 1))[0])))
+            #np.where(np.sum(overlap > overlap_thresh, 1) > 1)[0])))
+            np.where(np.sum(overlap >= overlap_thresh, 1) > 0)[0])))
+
+        if len(pick) >= max_boxes:
+            break
+
+    boxes = boxes[pick]
+    probs = probs[pick]
+    side_infos = [side_info[pick] for side_info in side_infos]
+
+    return boxes, probs, side_infos
+
+def nms_classwise(boxes, scores, side_infos, labels, overlap_thresh=0.9, max_boxes=300):
+    unique_labels = torch.unique(labels)  # Get unique class labels
+    
+    final_boxes = []
+    final_scores = []
+    final_labels = []
+    final_side_infos = [[] for _ in range(len(side_infos))]
+    
+    for label in unique_labels:
+        # Select boxes, scores, visibles, and indices for the current class
+        mask = labels == label
+        class_boxes = boxes[mask]
+        class_scores = scores[mask]
+        class_side_infos = [side_info[mask] for side_info in side_infos]
         
-        for label in unique_labels:
-            # Select boxes, scores, visibles, and indices for the current class
-            mask = labels == label
-            class_boxes = boxes[mask]
-            class_scores = scores[mask]
-            class_visibles = visibles[mask]
-            
-            # Apply NMS for the current class
-            class_boxes, class_scores, class_visibles = self.nms(class_boxes, class_scores, class_visibles,
-                                                                 overlap_thresh=overlap_thresh, max_boxes=max_boxes)
-            
-            final_boxes.append(class_boxes)
-            final_scores.append(class_scores)
-            final_visibles.append(class_visibles)
-            final_labels.extend([label] * len(class_boxes))
+        # Apply NMS for the current class
+        class_boxes, class_scores, class_side_infos = nms(class_boxes, class_scores, class_side_infos,
+                                                             overlap_thresh=overlap_thresh, max_boxes=max_boxes)
         
-        final_boxes = torch.cat(final_boxes)
-        final_scores = torch.cat(final_scores)
-        final_visibles = torch.cat(final_visibles)
-        final_labels = torch.tensor(final_labels)
-        
-        return final_boxes, final_scores, final_visibles, final_labels
+        final_boxes.append(class_boxes)
+        final_scores.append(class_scores)
+        for i in range(len(side_infos)) : final_side_infos[i].append(class_side_infos[i])
+        final_labels.extend([label] * len(class_boxes))
+    
+    final_boxes = torch.cat(final_boxes)
+    final_scores = torch.cat(final_scores)
+    final_side_infos_list = [torch.cat(final_side_info) for final_side_info in final_side_infos]
+    final_labels = torch.tensor(final_labels)
+    
+    return final_boxes, final_scores, final_side_infos_list, final_labels
+

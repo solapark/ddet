@@ -373,16 +373,16 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         """
         max_num = self.max_num
 
-        reid_scores, indexs = reid_scores.sigmoid().topk(max_num) #(300,), #(300,)
+        #reid_scores, indexs = reid_scores.sigmoid().topk(max_num) #(300,), #(300,)
 
         soft_cls_scores, labels = F.softmax(cls_scores, dim=-1).max(-1) #(900,), #(900,)
-        #soft_cls_scores, indexs = soft_cls_scores.view(-1).topk(max_num) #(300,), #(300,)
+        soft_cls_scores, indexs = soft_cls_scores.view(-1).topk(max_num) #(300,), #(300,)
 
         labels = labels[indexs]
         cls_scores_sig = cls_scores.sigmoid()[indexs, labels]
         bbox_preds = bbox_preds[indexs]
         visible_scores = visible_scores.sigmoid()[indexs]
-        #reid_scores = reid_scores.sigmoid()[indexs]
+        reid_scores = reid_scores.sigmoid()[indexs]
         query2ds = query2ds[indexs]
 
         final_box_preds = bbox_preds

@@ -20,6 +20,7 @@ from mmdet.models import HEADS, build_loss
 from mmdet.models.dense_heads.anchor_free_head import AnchorFreeHead
 from mmdet3d.core.bbox.coders import build_bbox_coder
 from projects.mmdet3d_plugin.core.bbox.util import normalize_bbox, get_box_form_pred_idx
+from projects.mmdet3d_plugin.core.bbox.dlt import mv_DLT
 import numpy as np
 from pytorch3d import transforms as tfms
 from mmdet.models.utils.transformer import inverse_sigmoid
@@ -61,6 +62,7 @@ class TMVReidHead(TMVDetHead):
 
     def __init__(self,
                  in_channels,
+                 query_refine=0,
                  rpn2dp2query=False,
                  inst3dp2query=False,
                  pos_emb_sig=False,
@@ -157,6 +159,7 @@ class TMVReidHead(TMVDetHead):
         self.pos_emb_sig=pos_emb_sig
         self.inst3dp2query=inst3dp2query
         self.rpn2dp2query=rpn2dp2query
+        self.query_refine=query_refine
 
         if self.cross_attn2 :
             self.include_attn_map = True 
@@ -506,9 +509,9 @@ class TMVReidHead(TMVDetHead):
                     rp_cx = (rp_x1y1x2y2[:,:,:,0]+rp_x1y1x2y2[:,:,:,2])/2
                     rp_cy = (rp_x1y1x2y2[:,:,:,1]+rp_x1y1x2y2[:,:,:,3])/2
                     rp_cxcy = torch.stack([rp_cx, rp_cy], -1) 
-                    rp_cxcy = rp_cxcy.permute(0, 2, 1, 3)
-                    cam_points = self.img2cam(rp_cxcy, img_metas)
-                    world_coords = self.cam2world(cam_points, img_metas).reshape(1, 1, -1, 3)
+                    rp_cxcy = rp_cxcy.permute(0, 2, 1, 3) #(1,3,300,2)
+                    cam_points = self.img2cam(rp_cxcy, img_metas) #(1,3,300,3)
+                    world_coords = self.cam2world(cam_points, img_metas).reshape(1, 1, -1, 3) #(1,1,900,3)
                     init_det_points = (world_coords - subtract) / divider 
 
             # transform query points to local viewpoints
@@ -530,6 +533,41 @@ class TMVReidHead(TMVDetHead):
                                                                   #self.output_det_encoding, self.output_seg_encoding,
                                                                   [self.query_encoding, self.output_det_2d_encoding], self.output_seg_encoding, 
                                                                   self.reg_branch, self.num_decode_views, self.include_attn_map, self.pos_emb_sig) #(6, 1, 3, 900, 256), [], [], #(6, 1, 2700, 2700), #(6, 1, 2700, 900)
+
+            for _ in range(self.query_refine) : 
+                visible_scores = torch.stack(
+                    [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
+                visible_scores = visible_scores[..., 0].transpose(2, 3) 
+                is_valids = visible_scores[-1, 0] > 0.5 #(900, 3)
+
+                L, B, _, _ = cross_attn_map.shape
+                #cross_attn_map #(6, 1, 2700, 300)
+                idx_scores = cross_attn_map.reshape(L, B, self.num_decode_views, self.num_query, self.num_input).transpose(2, 3) #(6, 1, 900, 3, 300)
+                max_inds = torch.argmax(idx_scores[-1, 0], -1) #(900, 3)
+                target_inds = max_inds.unsqueeze(-1).expand(-1, -1, 2)  # (900, 3, 2)
+                pred_rp = rp_cxcy[0].transpose(0,1) #(300, 3, 2)
+                pred_rp = pred_rp.gather(0, target_inds) #(900, 3, 2)
+
+                init_2Dquery = rp_cxcy.reshape(-1,2) #(900,3,2)
+                Pmat = init_det_points.new_tensor([img_metas[0]['world2img'] for img_meta in img_metas])[0]
+            
+                init_det_points = self.DLT(self.query3d_denorm[0,0], init_2Dquery, pred_rp, is_valids, Pmat, max_inds).reshape(1,1,self.num_query,3)
+                init_det_points = (init_det_points - subtract) / divider 
+
+                # transform query points to local viewpoints
+                init_det_points_mtv, query3d_denorm = self.get_mtv_points_local(init_det_points, img_metas) #(1, 3, 900, 3) xyz in cam_coord #(1, 1, 900, 3)
+                init_det_points_mtv, query2d_denorm = self.get_mtv_points_img(init_det_points_mtv, img_metas) #(1, 3, 900, 2) xy in img  #(1, 3, 900, 2)
+
+                self.query3d_norm, self.query3d_denorm = init_det_points, query3d_denorm #(1, 1, 900, 3), #(1, 1, 900, 3)
+                self.query2d_norm, self.query2d_denorm = init_det_points_mtv, query2d_denorm
+
+                _, init_det_points_mtv = self.add_pose_info(init_det_points, init_det_points_mtv, img_metas) #(1, 2, 900, 13) 
+                det_outputs, regs, seg_outputs, self_attn_map, cross_attn_map = self.det_transformer(feats, masks, pos_embeds, init_det_points,
+                                                                      init_det_points_mtv, init_seg_points,
+                                                                      #self.output_det_encoding, self.output_seg_encoding,
+                                                                      [self.query_encoding, self.output_det_2d_encoding], self.output_seg_encoding, 
+                                                                      self.reg_branch, self.num_decode_views, self.include_attn_map, self.pos_emb_sig) #(6, 1, 3, 900, 256), [], [], #(6, 1, 2700, 2700), #(6, 1, 2700, 900)
+
 
             # detection from queries
             #if len(det_outputs) > 0 and len(regs) > 0:
@@ -1388,8 +1426,34 @@ class TMVReidHead(TMVDetHead):
                 
                 world_coords.append(world_point)
 
-        world_coords = torch.stack(world_coords, dim=1)  # (B, V, M, 3)
+        world_coords = torch.stack(world_coords, dim=0)  # (V, M, 3)
         return world_coords
+
+    def DLT(self, init_3Dquery, init_2Dquery, rp_cxcy, is_valids, Pmat, max_inds) :
+        inst_3dp_list = []
+        for i in range(self.num_query) :
+            init_cam_idx = i//self.num_input
+            cam_inds = [init_cam_idx]
+            Ps = [Pmat[init_cam_idx]]
+            pnts = [init_2Dquery[i]]
+            for j in range(self.num_decode_views) : 
+                if not is_valids[i,j] : continue
+                cam_inds.append(init_cam_idx)
+                Ps.append(Pmat[j])
+                pnts.append(rp_cxcy[i,j])
+
+            if len(cam_inds) == 1 :
+                inst_3dp = init_3Dquery[i]
+            elif len(cam_inds) == 2 and init_cam_idx == cam_inds[1] :
+                new_inds = max_inds[i, init_cam_idx]
+                inst_3dp =  init_3Dquery[init_cam_idx*self.num_input + new_inds]
+            else : 
+                Ps = torch.stack(Ps, 0)
+                pnts = torch.cat(pnts, 0)
+                inst_3dp = mv_DLT(Ps, pnts) #(3,)
+
+            inst_3dp_list.append(inst_3dp)
+        return torch.stack(inst_3dp_list, 0)
 
     def add_pose_info(self, init_det_points, init_det_points_mtv, img_metas):
         imgH, imgW, _, _ = img_metas[0]['ori_shape']

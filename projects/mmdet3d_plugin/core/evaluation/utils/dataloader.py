@@ -17,23 +17,25 @@ class DataLoader:
                     data[cam_idx].append(info)
         return data 
 
-    def get_det(self, all_bboxes, all_is_valids, all_cls, all_score, all_reid_score=[]):
+    def get_det(self, all_bboxes, all_is_valids, all_cls, all_view_cls, all_score, all_view_score, all_idx_score, all_reid_score=[]):
         num_samples = len(all_bboxes)
         data = [[] for _ in range(self.num_valid_cam)]
         for sample_idx in range(num_samples) :
             cls = all_cls[sample_idx]
             score = all_score[sample_idx]
-            if self.reid_thresh :
-                reid_score = all_reid_score[sample_idx]
-                if reid_score < self.reid_thresh :
-                    continue
+            idx_score = all_idx_score[sample_idx]
+            reid_score = all_reid_score[sample_idx]
+            if reid_score < self.reid_thresh :
+                continue
 
             for cam_idx in range(self.num_valid_cam) :
                 is_valid = all_is_valids[sample_idx, cam_idx]
+                view_cls = all_view_cls[sample_idx, cam_idx]
+                view_score = all_view_score[sample_idx, cam_idx]
                 if is_valid >= self.visible_thresh :
                     cx, cy, w, h = all_bboxes[sample_idx][cam_idx]
                     x1, y1, x2, y2 = (cx - w/2), (cy - h/2), (cx + w/2), (cy + h/2)
-                    info = {'class':cls, 'x1':x1, 'y1':y1, 'x2':x2, 'y2':y2, 'reid_prob':reid_score, 'prob':score, 'is_valid':is_valid, 'inst_idx':sample_idx+1}
+                    info = {'class':cls, 'view_class':view_cls, 'x1':x1, 'y1':y1, 'x2':x2, 'y2':y2, 'reid_prob':reid_score, 'prob':score, 'prob':score, 'view_prob':view_score, 'is_valid':is_valid, 'idx_score':idx_score, 'inst_idx':sample_idx+1}
                     data[cam_idx].append(info)
         return data 
 

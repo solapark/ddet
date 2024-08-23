@@ -359,7 +359,7 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
     def encode(self):
         pass
 
-    def decode_single(self, cls_scores, reid_scores, visible_scores, bbox_preds, query2ds):
+    def decode_single(self, cls_scores, reid_scores, idx_scores, visible_scores, bbox_preds, query2ds):
         """Decode bboxes.
         Args:
             cls_scores (Tensor): Outputs from the classification head, \
@@ -372,24 +372,34 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
             list[dict]: Decoded boxes.
         """
         max_num = self.max_num
+        
 
         #reid_scores, indexs = reid_scores.sigmoid().topk(max_num) #(300,), #(300,)
 
-        soft_cls_scores, labels = F.softmax(cls_scores, dim=-1).max(-1) #(900,), #(900,)
-        soft_cls_scores, indexs = soft_cls_scores.view(-1).topk(max_num) #(300,), #(300,)
+        #soft_cls_scores, labels = F.softmax(cls_scores, dim=-1).max(-1) #(900,), #(900,)
+        #soft_cls_scores, indexs = soft_cls_scores.view(-1).topk(max_num) #(300,), #(300,)
 
-        labels = labels[indexs]
-        cls_scores_sig = cls_scores.sigmoid()[indexs, labels]
+        soft_cls_scores, labels = F.softmax(cls_scores, dim=-1).max(-1) #(900,3), #(900,3)
+        soft_cls_scores, indexs = soft_cls_scores[:, 0].view(-1).topk(max_num) #(900,), #(900,)
+
+        #labels = labels[indexs]
+        #cls_scores_sig = cls_scores.sigmoid()[indexs, labels]
+        cls_scores_new = [cls_scores[:,i][indexs, labels[:, i]] for i in range(self.num_views)] #(3, 900)
+        cls_scores_sig = torch.stack(cls_scores_new, 1).sigmoid() #(900, 3)
         bbox_preds = bbox_preds[indexs]
         visible_scores = visible_scores.sigmoid()[indexs]
         reid_scores = reid_scores.sigmoid()[indexs]
+        idx_scores = idx_scores[indexs]
         query2ds = query2ds[indexs]
 
         final_box_preds = bbox_preds
         final_reid_scores = reid_scores
-        final_cls_scores = cls_scores_sig
+        final_cls_scores = cls_scores_sig[:, 0]
+        final_view_cls_scores = cls_scores_sig
+        final_idx_scores = idx_scores
         final_visibles = visible_scores
-        final_preds = labels
+        final_preds = labels[:, 0]
+        final_view_preds = labels
         final_query2ds = query2ds
 
         # use score threshold
@@ -405,10 +415,13 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         boxes3d = final_box_preds[mask]
         reid_scores = final_reid_scores[mask]
         cls_scores = final_cls_scores[mask]
+        view_cls_scores = final_view_cls_scores[mask]
+        idx_scores = final_idx_scores[mask]
         visibles = final_visibles[mask]
         labels = final_preds[mask]
+        view_labels = final_view_preds[mask]
         query2ds = final_query2ds[mask]
-        predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'cls_scores': cls_scores, 'visibles': visibles, 'labels': labels, 'query2ds': query2ds}
+        predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'cls_scores': cls_scores, 'view_cls_scores': view_cls_scores, 'idx_scores':idx_scores, 'visibles': visibles, 'labels': labels, 'view_labels': view_labels, 'query2ds': query2ds}
 
         return predictions_dict
 
@@ -435,7 +448,7 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         for i in range(batch_size):
             pred_idx_scores, pred_idx = F.softmax(all_idx_scores[i], dim=-1).max(-1) #(900, 3), (900, 3)
             bbox_preds = get_box_form_pred_idx(pred_box, pred_idx, self.num_views) #(900, 3, 4)
-            predictions_list.append(self.decode_single(all_cls_scores[i], all_reid_scores[i], all_visible_scores[i], bbox_preds, all_query2ds[i]))
+            predictions_list.append(self.decode_single(all_cls_scores[i], all_reid_scores[i], pred_idx_scores, all_visible_scores[i], bbox_preds, all_query2ds[i]))
         return predictions_list
 
 

@@ -51,37 +51,44 @@ class MessytableEval:
             det_bboxes = []
             det_is_valids = []
             det_cls = [] 
+            det_view_cls = [] 
             det_score = []
+            det_view_score = []
             det_reid_score = []
+            det_idx_scores = []
             det_query = []
             for inst in det :
                 det_bboxes.append(inst['camera_instances'])
                 det_is_valids.append(inst['camera_instances_valid_flag'])
                 det_cls.append(inst['detection_name'])
+                det_view_cls.append(inst['view_detection_name'])
                 det_score.append(inst['detection_score'])
-                if self.reid_thresh : 
-                    det_reid_score.append(inst['reid_score'])
+                det_view_score.append(inst['view_detection_score'])
+                det_idx_scores.append(inst['idx_score'])
+                det_reid_score.append(inst['reid_score'])
                 if self.save_query : 
                     det_query.append(inst['query2d'])
             det_bboxes = np.array(det_bboxes).reshape((num_det, self.num_valid_cam, -1)) #(300, num_views, 4)
             det_is_valids = np.array(det_is_valids).reshape(num_det, self.num_valid_cam) #(300, num_views)
+            det_idx_scores = np.array(det_idx_scores).reshape(num_det, self.num_valid_cam) #(300, num_views)
             det_cls = np.array(det_cls) #(300,)
+            det_view_cls = np.array(det_view_cls) #(300,3)
             det_score = np.array(det_score) #(300,)
-            if self.reid_thresh : 
-                det_reid_score = np.array(det_reid_score) #(300,)
+            det_view_score = np.array(det_view_score) #(300,3)
+            det_reid_score = np.array(det_reid_score) #(300,)
 
             if self.save_query : 
                 det_query = np.array(det_query) #(300,)
 
             gt = self.DataLoader.get_gt(gt_bboxes, gt_is_valids, gt_cls)
-            det = self.DataLoader.get_det(det_bboxes, det_is_valids, det_cls, det_score, det_reid_score)
+            det = self.DataLoader.get_det(det_bboxes, det_is_valids, det_cls, det_view_cls, det_score, det_view_score, det_idx_scores, det_reid_score)
 
             for cam_idx in range(self.num_valid_cam) :
                 self.Map_calculator.add_tp_fp(det[cam_idx], gt[cam_idx])
 
             self.Json_saver.add_data(scene_id, det)
 
-            result = [scene_id, gt_bboxes.transpose(1, 0, 2), gt_is_valids.transpose(1, 0), gt_cls, det_bboxes.transpose(1, 0, 2), det_is_valids.transpose(1, 0), det_cls, det_score]
+            result = [scene_id, gt_bboxes.transpose(1, 0, 2), gt_is_valids.transpose(1, 0), gt_cls, det_bboxes.transpose(1, 0, 2), det_is_valids.transpose(1, 0), det_cls, det_view_cls.transpose(1,0), det_score, det_view_score.transpose(1,0), det_reid_score, det_idx_scores.transpose(1, 0)]
 
             if self.save_query :
                 result.append(det_query.transpose(1, 0, 2))

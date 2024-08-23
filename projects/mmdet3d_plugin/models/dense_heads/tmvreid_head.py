@@ -579,10 +579,13 @@ class TMVReidHead(TMVDetHead):
                     cls_scores = torch.stack(
                         [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 120)
                 #if cls_scores.dim() == 5:
+                '''
                 if is_test:
                     cls_scores = cls_scores[:, :, 0] #(6, 1, 900, 120)
                 else :
                     cls_scores = cls_scores.transpose(2,3) #(6, 1, 900, 3, 120)
+                '''
+                cls_scores = cls_scores.transpose(2,3) #(6, 1, 900, 3, 120)
 
                 visible_scores = torch.stack(
                     [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
@@ -1594,9 +1597,12 @@ class TMVReidHead(TMVDetHead):
             visibles = preds['visibles']
             reid_scores = preds['reid_scores']
             cls_scores = preds['cls_scores']
+            view_cls_scores = preds['view_cls_scores']
+            idx_scores = preds['idx_scores']
             labels = preds['labels']
+            view_labels = preds['view_labels']
             query2ds = preds['query2ds']
-            ret_list.append([bboxes, visibles, reid_scores, cls_scores, labels, query2ds])
+            ret_list.append([bboxes, visibles, reid_scores, cls_scores, view_cls_scores, idx_scores, labels, view_labels, query2ds])
         return ret_list
 
 

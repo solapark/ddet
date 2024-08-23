@@ -146,7 +146,7 @@ class CustomMessytableRpnDataset(CustomMessytableDataset):
             str: Path of the output json file.
         """
         messytable_annos = {}
-        mapped_class_names = self.CLASSES
+        mapped_class_names = np.array(self.CLASSES)
 
         print('Start to convert detection format...')
         for sample_id, det in enumerate(mmcv.track_iter_progress(results)):
@@ -160,8 +160,11 @@ class CustomMessytableRpnDataset(CustomMessytableDataset):
                     camera_instances=box['boxes'],
                     camera_instances_valid_flag=box['valid'],
                     detection_name=mapped_class_names[box['label']],
+                    view_detection_name=mapped_class_names[box['view_label']],
                     reid_score=box['reid_score'],
                     detection_score=box['cls_score'],
+                    view_detection_score=box['view_cls_score'],
+                    idx_score=box['idx_score'],
                     query2d=box['query2d'],
                     )
                 annos.append(messytable_anno)
@@ -192,7 +195,10 @@ def output_to_messytable_box(detection):
     visibles = detection['visibles_mtv2d'].numpy()
     reid_scores = detection['reid_scores_mtv2d'].numpy()
     cls_scores = detection['cls_scores_mtv2d'].numpy()
+    view_cls_scores = detection['view_cls_scores_mtv2d'].numpy()
+    idx_scores = detection['idx_scores_mtv2d'].numpy()
     labels = detection['labels_mtv2d'].numpy()
+    view_labels = detection['view_labels_mtv2d'].numpy()
     query2ds = detection['query2ds_mtv2d'].numpy()
 
     box_list = []
@@ -201,8 +207,11 @@ def output_to_messytable_box(detection):
             boxes = boxmtv2d[i],
             valid = visibles[i],
             label = labels[i],
+            view_label = view_labels[i],
             reid_score = reid_scores[i],
             cls_score = cls_scores[i],
+            view_cls_score = view_cls_scores[i],
+            idx_score = idx_scores[i],
             query2d = query2ds[i],
             )
         box_list.append(box)

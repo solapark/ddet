@@ -535,26 +535,35 @@ class TMVReidHead(TMVDetHead):
                                                                   [self.query_encoding, self.output_det_2d_encoding], self.output_seg_encoding, 
                                                                   self.reg_branch, self.num_decode_views, self.include_attn_map, self.pos_emb_sig) #(6, 1, 3, 900, 256), [], [], #(6, 1, 2700, 2700), #(6, 1, 2700, 900)
 
-            for _ in range(self.DLT.repeat) : 
-                visible_scores = torch.stack(
-                    [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
-                visible_scores = visible_scores[..., 0].transpose(2, 3) 
-                is_valids = visible_scores[-1, 0] > 0.5 #(900, 3)
+            if self.DLT is not None : 
+                for _ in range(self.DLT.repeat) : 
+                    cls_scores = torch.stack(
+                        [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 120)
+                    cls_scores = cls_scores.transpose(2,3)[-1, 0] #(6, 1, 900, 3, 120) -> (900, 3, 120)
 
-                L, B, _, _ = cross_attn_map.shape
-                #cross_attn_map #(6, 1, 2700, 300)
-                idx_scores = cross_attn_map.reshape(L, B, self.num_decode_views, self.num_query, self.num_input).transpose(2, 3) #(6, 1, 900, 3, 300)
-                max_inds = torch.argmax(idx_scores[-1, 0], -1) #(900, 3)
-                target_inds = max_inds.unsqueeze(-1).expand(-1, -1, 2)  # (900, 3, 2)
-                pred_rp = rp_cxcy[0].transpose(0,1) #(300, 3, 2)
-                pred_rp = pred_rp.gather(0, target_inds) #(900, 3, 2)
+                    visible_scores = torch.stack(
+                        [visible_branch(output) for visible_branch, output in zip(self.visible_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 1)
+                    visible_scores = visible_scores[..., 0].transpose(2, 3) 
+                    is_valids = visible_scores[-1, 0] > 0.5 #(900, 3)
 
-                init_2Dquery = rp_cxcy.reshape(-1,2) #(900,3,2)
-                Pmat = init_det_points.new_tensor([img_metas[0]['world2img'] for img_meta in img_metas])[0]
-            
-                init_det_points = self.DLT.dlt(self.query3d_denorm[0,0], init_2Dquery, pred_rp, is_valids, Pmat, max_inds).reshape(1,1,self.num_query,3)
+                    L, B, _, _ = cross_attn_map.shape
+                    #cross_attn_map #(6, 1, 2700, 300)
+                    idx_scores = cross_attn_map.reshape(L, B, self.num_decode_views, self.num_query, self.num_input).transpose(2, 3) #(6, 1, 900, 3, 300)
+                    max_inds = torch.argmax(idx_scores[-1, 0], -1) #(900, 3)
+                    target_inds = max_inds.unsqueeze(-1).expand(-1, -1, 2)  # (900, 3, 2)
+                    pred_rp = rp_cxcy[0].transpose(0,1) #(300, 3, 2)
+                    pred_rp = pred_rp.gather(0, target_inds) #(900, 3, 2)
 
-                init_det_points = (init_det_points - subtract) / divider 
+                    pred_rp_cam = cam_points[0].transpose(0,1) #(300, 3, 3)
+                    pred_rp_cam = pred_rp_cam.gather(0, target_inds) #(900, 3, 3)
+
+                    init_2Dquery = query2d_denorm[0].transpose(0,1) #(900,3,2)
+                    Pmat = init_det_points.new_tensor([img_metas[0]['world2img'] for img_meta in img_metas])[0]
+                
+                    #init_det_points = self.DLT.dlt(self.query3d_denorm[0,0], init_2Dquery, pred_rp, is_valids, cls_scores, Pmat, max_inds, img_metas).reshape(1,1,self.num_query,3)
+                    init_det_points = self.DLT.dlt(self.query3d_denorm[0,0], init_2Dquery, pred_rp, pred_rp_cam, is_valids, cls_scores, Pmat, max_inds, img_metas).reshape(1,1,self.num_query,3)
+
+                    init_det_points = (init_det_points - subtract) / divider 
 
                 # transform query points to local viewpoints
                 init_det_points_mtv, query3d_denorm = self.get_mtv_points_local(init_det_points, img_metas) #(1, 3, 900, 3) xyz in cam_coord #(1, 1, 900, 3)

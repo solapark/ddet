@@ -42,6 +42,10 @@ class Map_calculator:
                     gts[cam_idx].append(info)
         return gts
     '''
+    def init_detID2gtID(self, num_det) :
+        self.detID2gtID = -np.ones((self.num_valid_cam, num_det), dtype=int)
+        self.detIDs = dict()
+        self.det_is_val = np.zeros((self.num_valid_cam, num_det))
 
     def get_iou(self):
         return self.iou_result/self.cnt
@@ -142,6 +146,7 @@ class Map_calculator:
         dr_data = {cls : [] for cls in self.class_list_wo_bg}
         pred_probs = np.array([s['prob'] for s in pred])
         box_idx_sorted_by_prob = np.argsort(pred_probs)[::-1]
+        org_idx = np.arange(len(pred))
 
         for box_idx in box_idx_sorted_by_prob:
             pred_box = pred[box_idx]
@@ -149,7 +154,10 @@ class Map_calculator:
             cls = pred_box['class'] if not self.eval_rpn_only else 'water1'
             prob = pred_box['prob']
             bbox = self.get_x1y1x2y2(pred_box)
-            dr_data[cls].append({"confidence":prob, "bbox":bbox})
+            det_id = pred_box['inst_idx']
+            if det_id not in self.detIDs : 
+                self.detIDs[det_id] = len(self.detIDs)
+            dr_data[cls].append({"confidence":prob, "bbox":bbox, 'det_idx':det_id, 'ID':self.detIDs[det_id], 'val':pred_box['is_valid']})
         
         return dr_data
 
@@ -161,7 +169,7 @@ class Map_calculator:
             cls = gt_box['class'] if not self.eval_rpn_only else 'water1'
             bbox = self.get_x1y1x2y2(gt_box)
             bbox = list(map(round, bbox))
-            ground_truth_data[cls].append({"bbox":bbox, "used":False})
+            ground_truth_data[cls].append({"bbox":bbox, "used":False, 'inst_idx':gt_box['inst_idx']})
             self.gt_counter_per_class[cls] += 1
         
         return ground_truth_data
@@ -177,7 +185,7 @@ class Map_calculator:
                     pass
         return result_det
 
-    def add_tp_fp(self, pred, gt):
+    def add_tp_fp(self, pred, gt, view=None):
         dr_data_dict = self.get_dr_data(pred)
         ground_truth_data = self.get_ground_truth_data(gt)
 
@@ -194,9 +202,12 @@ class Map_calculator:
             for idx, detection in enumerate(dr_data):
                 ovmax = -1
                 gt_match = -1
+                gt_match_id = -1
                 # load detected object bounding-box
                 bb = detection["bbox"]
                 prob[idx] = detection["confidence"]
+                detID = detection["ID"]
+                self.det_is_val[view, detID] = detection["val"]
                 for obj in ground_truth_data[class_name]:
                     bbgt = obj["bbox"]
                     bi = [max(bb[0],bbgt[0]), max(bb[1],bbgt[1]), min(bb[2],bbgt[2]), min(bb[3],bbgt[3])]
@@ -221,16 +232,22 @@ class Map_calculator:
                     else:
                         # false positive (multiple detection)
                         fp[idx] = 1
+                    gt_match_id = gt_match["inst_idx"]
                 else:
                     # false positive
                     fp[idx] = 1
                     #if ovmax > 0:
                     #    status = "INSUFFICIENT OVERLAP"
 
+                self.detID2gtID[view, detID] = gt_match_id
+
             self.prob[class_name].extend(prob)
             self.TP[class_name].extend(tp)
             self.FP[class_name].extend(fp)
             self.iou[class_name].extend(iou)
+
+            self.reid_val.extend()
+            self.reid_prec.extend()
 
     def sort_tp_fp(self, prob, tp, fp):
         whole = np.column_stack([np.array(prob), np.array(tp), np.array(fp)])
@@ -369,6 +386,31 @@ class Map_calculator:
                 
         self.all_aps = list(self.all_aps_dict.values())
         return self.all_aps
+
+    def get_reid_eval(self) :
+        view2view_list = []
+        all_val = dict()
+        all_precision = dict()
+        for i in range(self.num_valid_cam) :
+            for j in range(i+1, self.num_valid_cam) : 
+                view2view = '%d-%d'%(i,j)
+                view2view_list.append(view2view)
+                all_val[view2view] = self.val[i,j]
+                all_precision[view2view] = self.tp[i,j]/self.val[i,j]
+        metric = ['samples', 'precision']
+        metric_eval = [self.val.sum(), self.tp.sum()/self.val.sum()]
+        return metric, metric_eval, view2view_list, [all_val, all_precision]
+
+    def get_reid_prec(self, thresh):
+        self.val=np.zeros((self.num_valid_cam, self.num_valid_cam), dtype=int)
+        self.tp=np.zeros((self.num_valid_cam, self.num_valid_cam))
+        det_is_valid = self.det_is_val > thresh 
+        for i in range(self.num_valid_cam) : 
+            for j in range(i+1, self.num_valid_cam) :
+                ij_val = det_is_valid[i] & det_is_valid[j]
+                ij_tp = (ij_val & (self.detID2gtID[i] == self.detID2gtID[j]) & (self.detID2gtID[i]!=-1))
+                self.val[i,j] = ij_val.sum()
+                self.tp[i,j] = ij_tp.sum()
 
     def get_valid_mean(self, metric):
         metric = np.array(metric)

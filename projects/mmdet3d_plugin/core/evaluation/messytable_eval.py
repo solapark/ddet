@@ -83,8 +83,9 @@ class MessytableEval:
             gt = self.DataLoader.get_gt(gt_bboxes, gt_is_valids, gt_cls)
             det = self.DataLoader.get_det(det_bboxes, det_is_valids, det_cls, det_view_cls, det_score, det_view_score, det_idx_scores, det_reid_score)
 
+            self.Map_calculator.init_detID2gtID(len(det_bboxes))
             for cam_idx in range(self.num_valid_cam) :
-                self.Map_calculator.add_tp_fp(det[cam_idx], gt[cam_idx])
+                self.Map_calculator.add_tp_fp(det[cam_idx], gt[cam_idx], cam_idx)
 
             self.Json_saver.add_data(scene_id, det)
 
@@ -98,10 +99,11 @@ class MessytableEval:
         self.Json_saver.close()
         #reid_eval_result = self.Reid_evaluator.eval()
 
-        all_aps = self.Map_calculator.get_aps()
+        det_aps = self.Map_calculator.get_aps()
         #iou_avg = self.Map_calculator.get_iou()
+        reid_aps = self.Map_calculator.get_reid_prec(self.visible_thresh)
 
-        self.Log_manager.add(all_aps, 'ap')
+        self.Log_manager.add(det_aps, 'ap')
         #self.Log_manager.add(iou_avg, 'iou')
         self.Log_manager.save()
 
@@ -129,22 +131,22 @@ class MessytableEval:
             metric += reid_eval.keys() #AP, fpr, IPAA
             mean_eval += reid_eval.values()
 
-        metric_name = '\t'.join(metric)
-        metric_value = ['%.3f'%(m) for m in mean_eval]
-        metric_value = '\t'.join(metric_value)
-        self.Log_manager.write_log('metric\t%s'%(metric_name))
-        self.Log_manager.write_log('ALL\t%s'%(metric_value))
+        def write_result(metric, mean_eval, valid_cls, eval) : 
+            metric_name = '\t'.join(metric)
+            metric_value = ['%.3f'%(m) for m in mean_eval]
+            metric_value = '\t'.join(metric_value)
+            self.Log_manager.write_log('metric\t%s'%(metric_name))
+            self.Log_manager.write_log('ALL\t%s'%(metric_value))
 
-        for _, cls in enumerate(valid_cls):
-            ev = [e[cls] for e in eval]
-            ev = ['%.2f'%(e) for e in ev]
-            ev = '\t'.join(ev)
-            #if e<0: continue
-            self.Log_manager.write_log('%s\t%s'%(cls, ev))
-        self.Log_manager.write_log('\n')
+            for _, cls in enumerate(valid_cls):
+                ev = [e[cls] for e in eval]
+                ev = ['%.2f'%(e) for e in ev]
+                ev = '\t'.join(ev)
+                #if e<0: continue
+                self.Log_manager.write_log('%s\t%s'%(cls, ev))
+            self.Log_manager.write_log('\n')
 
-        #del self.Log_manager
-        #del self.Map_calculator
-        #del self.reid_evaluator
-        #del self.DataLoader
-        #del self.Json_saver
+        write_result(metric, mean_eval, valid_cls, eval)
+
+        reid_metric, reid_metric_eval, view2view, reid_eval = self.Map_calculator.get_reid_eval()
+        write_result(reid_metric, reid_metric_eval, view2view, reid_eval)

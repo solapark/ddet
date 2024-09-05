@@ -373,7 +373,39 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         """
         max_num = self.max_num
         
+        max_cls_scores, labels = cls_scores.max(-1) #(900,3), #(900,3)
+        max_view_scores, max_views = max_cls_scores.max(-1) #(900,), #(900,)
 
+        ordered_idx = torch.arange(len(cls_scores), device=cls_scores.device)
+        max_labels = labels[ordered_idx, max_views] #(900,)
+        cls_scores_max_label_only = [cls_scores[:,i][ordered_idx, max_labels] for i in range(self.num_views)] #(3, 900)
+        cls_scores_sig = torch.stack(cls_scores_max_label_only, 1).sigmoid() #(900, 3)
+
+        max_cls_scores_sig, _ = cls_scores_sig.max(-1) #(900, 3)
+        #indexs = ordered_idx[:max_num]
+        _, indexs = max_cls_scores_sig.topk(max_num) 
+
+        max_cls_scores_sig = max_cls_scores_sig[indexs]
+        cls_scores_sig = cls_scores_sig[indexs]
+        max_labels = max_labels[indexs]
+        bbox_preds = bbox_preds[indexs]
+        visible_scores = visible_scores.sigmoid()[indexs]
+        reid_scores = reid_scores.sigmoid()[indexs]
+        idx_scores = idx_scores[indexs]
+        query2ds = query2ds[indexs]
+
+        final_box_preds = bbox_preds
+        final_reid_scores = reid_scores
+        final_cls_scores = max_cls_scores_sig
+        final_view_cls_scores = cls_scores_sig
+        final_idx_scores = idx_scores
+        #final_visibles = visible_scores
+        final_visibles = cls_scores_sig
+        final_preds = max_labels
+        final_view_preds = max_labels.repeat(self.num_views, 1).transpose(0,1)
+        final_query2ds = query2ds
+
+        '''
         #reid_scores, indexs = reid_scores.sigmoid().topk(max_num) #(300,), #(300,)
 
         #soft_cls_scores, labels = F.softmax(cls_scores, dim=-1).max(-1) #(900,), #(900,)
@@ -382,8 +414,8 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         soft_cls_scores, labels = F.softmax(cls_scores, dim=-1).max(-1) #(900,3), #(900,3)
         soft_cls_scores, indexs = soft_cls_scores[:, 0].view(-1).topk(max_num) #(900,), #(900,)
 
-        #labels = labels[indexs]
-        #cls_scores_sig = cls_scores.sigmoid()[indexs, labels]
+        indexs = torch.arange(max_num, device=soft_cls_scores.device)
+        labels = labels[indexs]
         cls_scores_new = [cls_scores[:,i][indexs, labels[:, i]] for i in range(self.num_views)] #(3, 900)
         cls_scores_sig = torch.stack(cls_scores_new, 1).sigmoid() #(900, 3)
         bbox_preds = bbox_preds[indexs]
@@ -401,6 +433,7 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         final_preds = labels[:, 0]
         final_view_preds = labels
         final_query2ds = query2ds
+        '''
 
         # use score threshold
         mask = torch.ones_like(final_cls_scores, dtype=torch.bool) #(300, )

@@ -118,7 +118,7 @@ class TMVDetNMSCoder(BaseBBoxCoder):
         boxes3d = boxes3d[:, 1:, [0, 1, 3, 5]] #(300, num_views, 4) #cxcywh
         boxes3d = cxcywh2x1y1x2y2(boxes3d) 
 
-        boxes3d, scores, visibles, labels = self.nms_classwise(boxes3d, scores, labels, visibles, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
+        boxes3d, scores, visibles, labels = self.nms_classwise(boxes3d, scores, labels, visibles, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num, overlap_view=overlap_view)
         
         boxes3d = x1y1x2y22cxcywh(boxes3d) #(N, num_views, 4)
         num_bbox = len(boxes3d)
@@ -163,11 +163,13 @@ class TMVReidNMSCoder(TMVReidNMSFreeCoder):
                  cls_score_threshold=None,
                  visible_score_threshold=None,
                  class_agnostic=False,
+                 overlap_view=1,
                  overlap_thresh=.9):
         super().__init__(max_num, num_classes, num_views, reid_score_threshold, cls_score_threshold)
         self.overlap_thresh = overlap_thresh
         self.visible_threshold = visible_score_threshold
         self.class_agnostic = class_agnostic
+        self.overlap_view = overlap_view
 
     def decode_single(self, cls_scores, reid_scores, idx_scores, visible_scores, bbox_preds, query2ds):
         predictions_dict = super().decode_single(cls_scores, reid_scores, idx_scores, visible_scores, bbox_preds, query2ds)
@@ -186,16 +188,16 @@ class TMVReidNMSCoder(TMVReidNMSFreeCoder):
         if self.class_agnostic : 
             boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels, labels] = nms(boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels, labels], overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
             # for align
-            boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels = nms_classwise(boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels, overlap_thresh=1.5, max_boxes=self.max_num) 
+            boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels = nms_classwise(boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels, overlap_thresh=1.5, max_boxes=self.max_num, overlap_view=self.overlap_view) 
         else : 
-            boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels = nms_classwise(boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
+            boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels = nms_classwise(boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num, overlap_view=self.overlap_view)
         
         boxes3d = x1y1x2y22cxcywh(boxes3d) #(N, num_views, 4)
  
         predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'idx_scores': idx_scores, 'cls_scores': cls_scores, 'view_cls_scores': view_cls_scores, 'visibles': visibles, 'labels': labels, 'view_labels': view_labels, 'query2ds': query2ds}
         return predictions_dict
 
-def nms(boxes, probs, side_infos, overlap_thresh=0.9, max_boxes=300):
+def nms(boxes, probs, side_infos, overlap_thresh=0.9, max_boxes=300, overlap_view=1):
     # boxes : (num_box, num_cam, 4)
     # probs : (num_box, )
     # is_valids : (num_box, num_cam)
@@ -262,7 +264,7 @@ def nms(boxes, probs, side_infos, overlap_thresh=0.9, max_boxes=300):
             #np.where(np.all(overlap > overlap_thresh, 1))[0])))
             #np.where(np.any(overlap > overlap_thresh, 1))[0])))
             #np.where(np.sum(overlap > overlap_thresh, 1) > 1)[0])))
-            np.where(np.sum(overlap >= overlap_thresh, 1) > 0)[0])))
+            np.where(np.sum(overlap >= overlap_thresh, 1) >= overlap_view)[0])))
 
         if len(pick) >= max_boxes:
             break
@@ -273,7 +275,7 @@ def nms(boxes, probs, side_infos, overlap_thresh=0.9, max_boxes=300):
 
     return boxes, probs, side_infos
 
-def nms_classwise(boxes, scores, side_infos, labels, overlap_thresh=0.9, max_boxes=300):
+def nms_classwise(boxes, scores, side_infos, labels, overlap_thresh=0.9, max_boxes=300, overlap_view=1):
     unique_labels = torch.unique(labels)  # Get unique class labels
     
     final_boxes = []
@@ -290,7 +292,7 @@ def nms_classwise(boxes, scores, side_infos, labels, overlap_thresh=0.9, max_box
         
         # Apply NMS for the current class
         class_boxes, class_scores, class_side_infos = nms(class_boxes, class_scores, class_side_infos,
-                                                             overlap_thresh=overlap_thresh, max_boxes=max_boxes)
+                                                             overlap_thresh=overlap_thresh, max_boxes=max_boxes, overlap_view=overlap_view)
         
         final_boxes.append(class_boxes)
         final_scores.append(class_scores)

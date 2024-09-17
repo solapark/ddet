@@ -13,7 +13,7 @@ import torch
 
 from mmdet.core.bbox import BaseBBoxCoder
 from mmdet.core.bbox.builder import BBOX_CODERS
-from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox, get_box_form_pred_idx
+from projects.mmdet3d_plugin.core.bbox.util import denormalize_bbox, get_box_form_pred_idx, cxcywh2x1y1x2y2
 import torch.nn.functional as F
 
 @BBOX_CODERS.register_module()
@@ -348,13 +348,16 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
                  num_views=3,
                  reid_score_threshold=None,
                  cls_score_threshold=None,
+                 visible_score_threshold=None,
+                 uncertainty=False,
                 ):
         self.max_num = max_num
         self.num_views = num_views
         self.reid_score_threshold = reid_score_threshold
         self.cls_score_threshold = cls_score_threshold
+        self.visible_score_threshold = visible_score_threshold
         self.num_classes = num_classes
-        pass
+        self.uncertainty = uncertainty
 
     def encode(self):
         pass
@@ -445,6 +448,19 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
             reid_thresh_mask = final_reid_scores > self.reid_score_threshold
             mask &= reid_thresh_mask
 
+        if self.visible_score_threshold is not None:
+            visible_thresh_mask = torch.any(final_visibles > self.visible_score_threshold, 1)
+            mask &= visible_thresh_mask
+
+        if self.uncertainty  :
+            x1,y1,x2,y2 = cxcywh2x1y1x2y2(final_box_preds).permute(2,0,1)
+            QX, QY = query2ds.permute(2,0,1)
+            outlier = ~((x1 < QX) & (QX < x2) & (y1 < QY) & (QY < y2))
+            outlier &= (final_visibles > self.visible_score_threshold)
+            outlier = torch.any(outlier, 1)
+            uncertainty_mask = ~outlier
+            mask &= uncertainty_mask
+
         boxes3d = final_box_preds[mask]
         reid_scores = final_reid_scores[mask]
         cls_scores = final_cls_scores[mask]
@@ -454,6 +470,7 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         labels = final_preds[mask]
         view_labels = final_view_preds[mask]
         query2ds = final_query2ds[mask]
+
         predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'cls_scores': cls_scores, 'view_cls_scores': view_cls_scores, 'idx_scores':idx_scores, 'visibles': visibles, 'labels': labels, 'view_labels': view_labels, 'query2ds': query2ds}
 
         return predictions_dict

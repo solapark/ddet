@@ -515,28 +515,27 @@ class TMVReidHead(TMVDetHead):
                     world_coords = self.cam2world(cam_points, img_metas).reshape(1, 1, -1, 3) #(1,1,900,3)
                     init_det_points = (world_coords - subtract) / divider 
 
-            # transform query points to local viewpoints
-            init_det_points_mtv, query3d_denorm = self.get_mtv_points_local(init_det_points, img_metas) #(1, 3, 900, 3) xyz in cam_coord #(1, 1, 900, 3)
-            init_det_points_mtv, query2d_denorm = self.get_mtv_points_img(init_det_points_mtv, img_metas) #(1, 3, 900, 2) xy in img  #(1, 3, 900, 2)
-
-            self.query3d_norm, self.query3d_denorm = init_det_points, query3d_denorm #(1, 1, 900, 3), #(1, 1, 900, 3)
-            self.query2d_norm, self.query2d_denorm = init_det_points_mtv, query2d_denorm
-
-            if not self.pos_emb_cxcy_only :
-                _, init_det_points_mtv = self.add_pose_info(init_det_points, init_det_points_mtv, img_metas) #(1, 2, 900, 13) 
-
             # TODO: seg points
             init_seg_points = None
 
-            # transformer decode
-            det_outputs, regs, seg_outputs, self_attn_map, cross_attn_map = self.det_transformer(feats, masks, pos_embeds, init_det_points,
-                                                                  init_det_points_mtv, init_seg_points,
-                                                                  #self.output_det_encoding, self.output_seg_encoding,
-                                                                  [self.query_encoding, self.output_det_2d_encoding], self.output_seg_encoding, 
-                                                                  self.reg_branch, self.num_decode_views, self.include_attn_map, self.pos_emb_sig) #(6, 1, 3, 900, 256), [], [], #(6, 1, 2700, 2700), #(6, 1, 2700, 900)
-
             if self.DLT is not None : 
                 for _ in range(self.DLT.repeat) : 
+                    # transform query points to local viewpoints
+                    init_det_points_mtv, query3d_denorm = self.get_mtv_points_local(init_det_points, img_metas) #(1, 3, 900, 3) xyz in cam_coord #(1, 1, 900, 3)
+                    init_det_points_mtv, query2d_denorm = self.get_mtv_points_img(init_det_points_mtv, img_metas) #(1, 3, 900, 2) xy in img  #(1, 3, 900, 2)
+
+                    self.query3d_norm, self.query3d_denorm = init_det_points, query3d_denorm #(1, 1, 900, 3), #(1, 1, 900, 3)
+                    self.query2d_norm, self.query2d_denorm = init_det_points_mtv, query2d_denorm
+
+                    _, init_det_points_mtv = self.add_pose_info(init_det_points, init_det_points_mtv, img_metas) #(1, 2, 900, 13) 
+
+                    # transformer decode
+                    det_outputs, regs, seg_outputs, self_attn_map, cross_attn_map = self.det_transformer(feats, masks, pos_embeds, init_det_points,
+                                                                          init_det_points_mtv, init_seg_points,
+                                                                          #self.output_det_encoding, self.output_seg_encoding,
+                                                                          [self.query_encoding, self.output_det_2d_encoding], self.output_seg_encoding, 
+                                                                          self.reg_branch, self.num_decode_views, self.include_attn_map, self.pos_emb_sig) #(6, 1, 3, 900, 256), [], [], #(6, 1, 2700, 2700), #(6, 1, 2700, 900)
+
                     cls_scores = torch.stack(
                         [cls_branch(output) for cls_branch, output in zip(self.cls_branch, det_outputs)], dim=0) #(6, 1, 3, 900, 120)
                     cls_scores = cls_scores.transpose(2,3)[-1, 0] #(6, 1, 900, 3, 120) -> (900, 3, 120)
@@ -560,24 +559,25 @@ class TMVReidHead(TMVDetHead):
                     init_2Dquery = query2d_denorm[0].transpose(0,1) #(900,3,2)
                     Pmat = init_det_points.new_tensor([img_metas[0]['world2img'] for img_meta in img_metas])[0]
                 
+                    init_det_points = init_det_points * divider + subtract
                     #init_det_points = self.DLT.dlt(self.query3d_denorm[0,0], init_2Dquery, pred_rp, is_valids, cls_scores, Pmat, max_inds, img_metas).reshape(1,1,self.num_query,3)
-                    init_det_points = self.DLT.dlt(self.query3d_denorm[0,0], init_2Dquery, pred_rp, pred_rp_cam, is_valids, cls_scores, Pmat, max_inds, img_metas).reshape(1,1,self.num_query,3)
+                    init_det_points = self.DLT.dlt(init_det_points[0,0], init_2Dquery, pred_rp, pred_rp_cam, is_valids, cls_scores, Pmat, max_inds, img_metas).reshape(1,1,self.num_query,3)
 
                     init_det_points = (init_det_points - subtract) / divider 
 
-                # transform query points to local viewpoints
-                init_det_points_mtv, query3d_denorm = self.get_mtv_points_local(init_det_points, img_metas) #(1, 3, 900, 3) xyz in cam_coord #(1, 1, 900, 3)
-                init_det_points_mtv, query2d_denorm = self.get_mtv_points_img(init_det_points_mtv, img_metas) #(1, 3, 900, 2) xy in img  #(1, 3, 900, 2)
+            # transform query points to local viewpoints
+            init_det_points_mtv, query3d_denorm = self.get_mtv_points_local(init_det_points, img_metas) #(1, 3, 900, 3) xyz in cam_coord #(1, 1, 900, 3)
+            init_det_points_mtv, query2d_denorm = self.get_mtv_points_img(init_det_points_mtv, img_metas) #(1, 3, 900, 2) xy in img  #(1, 3, 900, 2)
 
-                self.query3d_norm, self.query3d_denorm = init_det_points, query3d_denorm #(1, 1, 900, 3), #(1, 1, 900, 3)
-                self.query2d_norm, self.query2d_denorm = init_det_points_mtv, query2d_denorm
+            self.query3d_norm, self.query3d_denorm = init_det_points, query3d_denorm #(1, 1, 900, 3), #(1, 1, 900, 3)
+            self.query2d_norm, self.query2d_denorm = init_det_points_mtv, query2d_denorm
 
-                _, init_det_points_mtv = self.add_pose_info(init_det_points, init_det_points_mtv, img_metas) #(1, 2, 900, 13) 
-                det_outputs, regs, seg_outputs, self_attn_map, cross_attn_map = self.det_transformer(feats, masks, pos_embeds, init_det_points,
-                                                                      init_det_points_mtv, init_seg_points,
-                                                                      #self.output_det_encoding, self.output_seg_encoding,
-                                                                      [self.query_encoding, self.output_det_2d_encoding], self.output_seg_encoding, 
-                                                                      self.reg_branch, self.num_decode_views, self.include_attn_map, self.pos_emb_sig) #(6, 1, 3, 900, 256), [], [], #(6, 1, 2700, 2700), #(6, 1, 2700, 900)
+            _, init_det_points_mtv = self.add_pose_info(init_det_points, init_det_points_mtv, img_metas) #(1, 2, 900, 13) 
+            det_outputs, regs, seg_outputs, self_attn_map, cross_attn_map = self.det_transformer(feats, masks, pos_embeds, init_det_points,
+                                                                  init_det_points_mtv, init_seg_points,
+                                                                  #self.output_det_encoding, self.output_seg_encoding,
+                                                                  [self.query_encoding, self.output_det_2d_encoding], self.output_seg_encoding, 
+                                                                  self.reg_branch, self.num_decode_views, self.include_attn_map, self.pos_emb_sig) #(6, 1, 3, 900, 256), [], [], #(6, 1, 2700, 2700), #(6, 1, 2700, 900)
 
 
             # detection from queries

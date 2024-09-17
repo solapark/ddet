@@ -13,6 +13,16 @@ class Map_calculator:
         self.cls_thresh = cls_thresh
         self.metric = ['MODA', 'MODP', 'F1', 'Recall', 'Precision']
 
+        self.num_reid_samples=np.zeros((self.num_valid_cam, self.num_valid_cam), dtype=int)
+        self.reid_tp=np.zeros((self.num_valid_cam, self.num_valid_cam))
+
+        self.mv_cls_tp = 0
+        self.mv_cls_fp = 0
+
+        self.mv_cls_gs = 0
+        self.mv_cls_tp_gt = 0
+ 
+
     def reset(self):
         self.TP = {cls : [] for cls in self.class_list_wo_bg}
         self.FP = {cls : [] for cls in self.class_list_wo_bg}
@@ -45,7 +55,8 @@ class Map_calculator:
     def init_detID2gtID(self, num_det) :
         self.detID2gtID = -np.ones((self.num_valid_cam, num_det), dtype=int)
         self.detIDs = dict()
-        self.det_is_val = np.zeros((self.num_valid_cam, num_det))
+
+        self.det_is_val=np.zeros((self.num_valid_cam, num_det))
 
     def get_iou(self):
         return self.iou_result/self.cnt
@@ -188,6 +199,7 @@ class Map_calculator:
     def add_tp_fp(self, pred, gt, view=None):
         dr_data_dict = self.get_dr_data(pred)
         ground_truth_data = self.get_ground_truth_data(gt)
+        self.num_gt = len(gt)
 
         dr_data_dict = self.thresholding(dr_data_dict)
 
@@ -240,14 +252,12 @@ class Map_calculator:
                     #    status = "INSUFFICIENT OVERLAP"
 
                 self.detID2gtID[view, detID] = gt_match_id
+                #print(class_name, "-", view, "-", detID, "->", gt_match_id, "iou",  ovmax)
 
             self.prob[class_name].extend(prob)
             self.TP[class_name].extend(tp)
             self.FP[class_name].extend(fp)
             self.iou[class_name].extend(iou)
-
-            self.reid_val.extend()
-            self.reid_prec.extend()
 
     def sort_tp_fp(self, prob, tp, fp):
         whole = np.column_stack([np.array(prob), np.array(tp), np.array(fp)])
@@ -387,6 +397,18 @@ class Map_calculator:
         self.all_aps = list(self.all_aps_dict.values())
         return self.all_aps
 
+    def get_mv_cls_eval(self) :
+        self.mv_cls_ss = self.mv_cls_tp + self.mv_cls_fp
+        self.mv_cls_fn = self.mv_cls_gs - self.mv_cls_tp_gt
+
+        self.mv_cls_rec = self.mv_cls_tp_gt / self.mv_cls_gs
+        self.mv_cls_prec = self.mv_cls_tp / self.mv_cls_ss
+        self.mv_cls_f1 = 2 * (self.mv_cls_rec * self.mv_cls_prec) / (self.mv_cls_rec + self.mv_cls_prec)
+
+        metric = ['SS(TP+FP)', 'TP', 'FP', 'GS(GT_TP+GT_FN)', 'GT_TP', 'GT_FN', 'Precision(TP/SS)', 'Recall(GT_TP/GS)', 'F1']
+        metric_eval = [self.mv_cls_ss, self.mv_cls_tp, self.mv_cls_fp, self.mv_cls_gs, self.mv_cls_tp_gt, self.mv_cls_fn, self.mv_cls_prec, self.mv_cls_rec, self.mv_cls_f1]
+        return metric, metric_eval, [], [dict(), dict()]
+
     def get_reid_eval(self) :
         view2view_list = []
         all_val = dict()
@@ -395,23 +417,36 @@ class Map_calculator:
             for j in range(i+1, self.num_valid_cam) : 
                 view2view = '%d-%d'%(i,j)
                 view2view_list.append(view2view)
-                all_val[view2view] = self.val[i,j]
-                all_precision[view2view] = self.tp[i,j]/self.val[i,j]
+                all_val[view2view] = self.num_reid_samples[i,j]
+                all_precision[view2view] = self.reid_tp[i,j]/self.num_reid_samples[i,j]
         metric = ['samples', 'precision']
-        metric_eval = [self.val.sum(), self.tp.sum()/self.val.sum()]
+        metric_eval = [self.num_reid_samples.sum(), self.reid_tp.sum()/self.num_reid_samples.sum()]
         return metric, metric_eval, view2view_list, [all_val, all_precision]
 
-    def get_reid_prec(self, thresh):
-        self.val=np.zeros((self.num_valid_cam, self.num_valid_cam), dtype=int)
-        self.tp=np.zeros((self.num_valid_cam, self.num_valid_cam))
+    def sum_all_view_reid_tp(self, thresh):
         det_is_valid = self.det_is_val > thresh 
         for i in range(self.num_valid_cam) : 
             for j in range(i+1, self.num_valid_cam) :
                 ij_val = det_is_valid[i] & det_is_valid[j]
                 ij_tp = (ij_val & (self.detID2gtID[i] == self.detID2gtID[j]) & (self.detID2gtID[i]!=-1))
-                self.val[i,j] = ij_val.sum()
-                self.tp[i,j] = ij_tp.sum()
+                self.num_reid_samples[i,j] += ij_val.sum()
+                self.reid_tp[i,j] += ij_tp.sum()
 
+    def calc_mv_cls_eval(self, thresh) : 
+        det_is_valid = self.det_is_val > thresh 
+        det_gt_id = self.detID2gtID.max(0) #(N,)
+        is_fp = (det_gt_id == -1)
+        for i in range(self.num_valid_cam) : 
+            is_diff = self.detID2gtID[i]!=det_gt_id
+            is_fp |= (det_is_valid[i] & is_diff)
+        is_tp = ~is_fp    
+
+        self.mv_cls_tp += is_tp.sum()
+        self.mv_cls_fp += is_fp.sum()
+
+        self.mv_cls_gs += self.num_gt
+        self.mv_cls_tp_gt += len(np.unique(det_gt_id[is_tp]))
+ 
     def get_valid_mean(self, metric):
         metric = np.array(metric)
         #metric = metric[metric >= 0]

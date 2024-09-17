@@ -163,9 +163,10 @@ class TMVReidNMSCoder(TMVReidNMSFreeCoder):
                  cls_score_threshold=None,
                  visible_score_threshold=None,
                  class_agnostic=False,
+                 uncertainty=False,
                  overlap_view=1,
                  overlap_thresh=.9):
-        super().__init__(max_num, num_classes, num_views, reid_score_threshold, cls_score_threshold)
+        super().__init__(max_num, num_classes, num_views, reid_score_threshold, cls_score_threshold, visible_score_threshold, uncertainty)
         self.overlap_thresh = overlap_thresh
         self.visible_threshold = visible_score_threshold
         self.class_agnostic = class_agnostic
@@ -184,20 +185,21 @@ class TMVReidNMSCoder(TMVReidNMSFreeCoder):
         query2ds = predictions_dict['query2ds']
 
         boxes3d = cxcywh2x1y1x2y2(boxes3d) 
+        is_vis = visibles>self.visible_score_threshold
 
         if self.class_agnostic : 
-            boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels, labels] = nms(boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels, labels], overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
+            boxes3d, cls_scores, is_vis, [view_cls_scores, reid_scores, visibles, idx_scores, query2ds, view_labels, labels] = nms(boxes3d, cls_scores, is_vis, [view_cls_scores, reid_scores, visibles, idx_scores, query2ds, view_labels, labels], overlap_thresh=self.overlap_thresh, max_boxes=self.max_num)
             # for align
-            boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels = nms_classwise(boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels, overlap_thresh=1.5, max_boxes=self.max_num, overlap_view=self.overlap_view) 
+            boxes3d, cls_scores, is_vis, [view_cls_scores, reid_scores, visibles, idx_scores, query2ds, view_labels], labels = nms_classwise(boxes3d, cls_scores, is_vis, [view_cls_scores, reid_scores, visibles, idx_scores, query2ds, view_labels], labels, overlap_thresh=1.5, max_boxes=self.max_num, overlap_view=self.overlap_view) 
         else : 
-            boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels = nms_classwise(boxes3d, cls_scores, [view_cls_scores, reid_scores, idx_scores, visibles, query2ds, view_labels], labels, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num, overlap_view=self.overlap_view)
+            boxes3d, cls_scores, is_vis, [view_cls_scores, reid_scores, visibles, idx_scores, query2ds, view_labels], labels = nms_classwise(boxes3d, cls_scores, is_vis, [view_cls_scores, reid_scores, visibles, idx_scores, query2ds, view_labels], labels, overlap_thresh=self.overlap_thresh, max_boxes=self.max_num, overlap_view=self.overlap_view)
         
         boxes3d = x1y1x2y22cxcywh(boxes3d) #(N, num_views, 4)
  
         predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'idx_scores': idx_scores, 'cls_scores': cls_scores, 'view_cls_scores': view_cls_scores, 'visibles': visibles, 'labels': labels, 'view_labels': view_labels, 'query2ds': query2ds}
         return predictions_dict
 
-def nms(boxes, probs, side_infos, overlap_thresh=0.9, max_boxes=300, overlap_view=1):
+def nms(boxes, probs, is_vis, side_infos, overlap_thresh=0.9, max_boxes=300, overlap_view=1):
     # boxes : (num_box, num_cam, 4)
     # probs : (num_box, )
     # is_valids : (num_box, num_cam)
@@ -209,6 +211,9 @@ def nms(boxes, probs, side_infos, overlap_thresh=0.9, max_boxes=300, overlap_vie
     #   Step 2: Find the larget prob 'Last' in the list and save it to the pick list
     #   Step 3: Calculate the IoU with 'Last' box and other boxes in the list. If the IoU is larger than overlap_threshold, delete the box from list
     #   Step 4: Repeat step 2 and step 3 until there is no item in the probs list 
+    overlap_view_tensor = torch.tensor(overlap_view, device=is_vis.device)
+    num_val_views = is_vis.sum(1)
+
     if len(boxes) == 0:
         return []
 
@@ -260,26 +265,26 @@ def nms(boxes, probs, side_infos, overlap_thresh=0.9, max_boxes=300, overlap_vie
         overlap = overlap.cpu().numpy()
 
         # delete all indexes from the index list that have
-        idxs = np.delete(idxs, np.concatenate(([last],
-            #np.where(np.all(overlap > overlap_thresh, 1))[0])))
-            #np.where(np.any(overlap > overlap_thresh, 1))[0])))
-            #np.where(np.sum(overlap > overlap_thresh, 1) > 1)[0])))
-            np.where(np.sum(overlap >= overlap_thresh, 1) >= overlap_view)[0])))
+        num_thresh_view = torch.minimum(overlap_view_tensor, torch.maximum(num_val_views[idxs[:last]], num_val_views[i])).cpu().numpy()
+        valid = (overlap >= overlap_thresh) & is_vis[i].cpu().numpy() & is_vis[idxs[:last]].cpu().numpy()
+        idxs = np.delete(idxs, np.concatenate(([last], np.where(np.sum(valid, 1) >= num_thresh_view)[0])))
 
         if len(pick) >= max_boxes:
             break
 
     boxes = boxes[pick]
     probs = probs[pick]
+    is_vis = is_vis[pick]
     side_infos = [side_info[pick] for side_info in side_infos]
 
-    return boxes, probs, side_infos
+    return boxes, probs, is_vis, side_infos
 
-def nms_classwise(boxes, scores, side_infos, labels, overlap_thresh=0.9, max_boxes=300, overlap_view=1):
+def nms_classwise(boxes, scores, num_val_view, side_infos, labels, overlap_thresh=0.9, max_boxes=300, overlap_view=1):
     unique_labels = torch.unique(labels)  # Get unique class labels
     
     final_boxes = []
     final_scores = []
+    final_num_val_view = []
     final_labels = []
     final_side_infos = [[] for _ in range(len(side_infos))]
     
@@ -288,21 +293,24 @@ def nms_classwise(boxes, scores, side_infos, labels, overlap_thresh=0.9, max_box
         mask = labels == label
         class_boxes = boxes[mask]
         class_scores = scores[mask]
+        class_num_val_view = num_val_view[mask]
         class_side_infos = [side_info[mask] for side_info in side_infos]
         
         # Apply NMS for the current class
-        class_boxes, class_scores, class_side_infos = nms(class_boxes, class_scores, class_side_infos,
+        class_boxes, class_scores, class_num_val_view, class_side_infos = nms(class_boxes, class_scores, class_num_val_view, class_side_infos,
                                                              overlap_thresh=overlap_thresh, max_boxes=max_boxes, overlap_view=overlap_view)
         
         final_boxes.append(class_boxes)
         final_scores.append(class_scores)
+        final_num_val_view.append(class_num_val_view)
         for i in range(len(side_infos)) : final_side_infos[i].append(class_side_infos[i])
         final_labels.extend([label] * len(class_boxes))
     
     final_boxes = torch.cat(final_boxes)
     final_scores = torch.cat(final_scores)
+    final_num_val_view = torch.cat(final_num_val_view)
     final_side_infos_list = [torch.cat(final_side_info) for final_side_info in final_side_infos]
     final_labels = torch.tensor(final_labels)
     
-    return final_boxes, final_scores, final_side_infos_list, final_labels
+    return final_boxes, final_scores, final_num_val_view, final_side_infos_list, final_labels
 

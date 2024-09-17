@@ -87,6 +87,9 @@ class MessytableEval:
             for cam_idx in range(self.num_valid_cam) :
                 self.Map_calculator.add_tp_fp(det[cam_idx], gt[cam_idx], cam_idx)
 
+            self.Map_calculator.sum_all_view_reid_tp(self.visible_thresh)
+            self.Map_calculator.calc_mv_cls_eval(self.visible_thresh)
+
             self.Json_saver.add_data(scene_id, det)
 
             result = [scene_id, gt_bboxes.transpose(1, 0, 2), gt_is_valids.transpose(1, 0), gt_cls, det_bboxes.transpose(1, 0, 2), det_is_valids.transpose(1, 0), det_cls, det_view_cls.transpose(1,0), det_score, det_view_score.transpose(1,0), det_reid_score, det_idx_scores.transpose(1, 0)]
@@ -101,7 +104,6 @@ class MessytableEval:
 
         det_aps = self.Map_calculator.get_aps()
         #iou_avg = self.Map_calculator.get_iou()
-        reid_aps = self.Map_calculator.get_reid_prec(self.visible_thresh)
 
         self.Log_manager.add(det_aps, 'ap')
         #self.Log_manager.add(iou_avg, 'iou')
@@ -150,3 +152,6 @@ class MessytableEval:
 
         reid_metric, reid_metric_eval, view2view, reid_eval = self.Map_calculator.get_reid_eval()
         write_result(reid_metric, reid_metric_eval, view2view, reid_eval)
+
+        mv_cls_metric, mv_cls_metric_eval, dum1, dum2 = self.Map_calculator.get_mv_cls_eval()
+        write_result(mv_cls_metric, mv_cls_metric_eval, dum1, dum1)

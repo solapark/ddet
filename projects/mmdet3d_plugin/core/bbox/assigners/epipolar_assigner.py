@@ -23,8 +23,10 @@ from projects.mmdet3d_plugin.core.bbox.util import cxcywh2x1y1x2y2
 @BBOX_ASSIGNERS.register_module()
 class EpipolarAssignerMtvReid2D(BaseAssigner):
     def __init__(self,
-                 valid_cost_thresh):
+                 valid_cost_thresh, 
+                 iou_thresh=0.5):
         self.valid_cost_thresh = valid_cost_thresh
+        self.iou_thresh = iou_thresh
 
     def assign(self, det_rpn_idx, det_bbox_cxcywh, gt_rpn_idx, gt_bbox_cxcywh, gt_labels, cost):
         det_bbox = cxcywh2x1y1x2y2(det_bbox_cxcywh)
@@ -41,7 +43,7 @@ class EpipolarAssignerMtvReid2D(BaseAssigner):
         for i in range(num_views):
             iou[..., i] = bbox_overlaps(det_bbox[:, i], gt_bbox[:, i]) #(900, 4) #(num_gt, 4) -> (900, num_gt)
 
-        is_big_iou = iou > .5 #(900, num_gt, 3)
+        is_big_iou = iou > self.iou_thresh #(900, num_gt, 3)
         is_many_big_iou = is_big_iou.sum(-1) > 1  #(900, num_gt)
         is_valid = (is_small_cost & is_many_big_iou) #(900, num_gt)
 

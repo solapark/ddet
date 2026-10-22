@@ -236,6 +236,7 @@ class FourierMLPEncoding(BaseModule):
                  fourier_channels=-1,
                  temperature=10000,
                  max_frequency=64,
+                 zero_output=False,
                  init_cfg=None):
         super(FourierMLPEncoding, self).__init__(init_cfg)
         self.input_channels = input_channels
@@ -244,6 +245,7 @@ class FourierMLPEncoding(BaseModule):
         self.fourier_channels = fourier_channels
         self.temperature = temperature
         self.max_frequency = max_frequency
+        self.zero_output = zero_output
 
         start_channels = fourier_channels if fourier_channels > 0 else input_channels
 
@@ -262,7 +264,10 @@ class FourierMLPEncoding(BaseModule):
                 fourier_type=self.fourier_type,
                 temperature=self.temperature,
                 max_freq=self.max_frequency)
-        return self.mlp(pos)
+        out = self.mlp(pos)
+        if self.zero_output:
+            return out * 0
+        return out
 
 
 def pos2posemb3d(pos, num_pos_feats=128, fourier_type='exponential', temperature=10000, max_freq=8):

@@ -383,7 +383,7 @@ class TMVReidTransformerDecoderLayer(BaseTransformerLayer):
                 norm_index += 1
 
             elif layer == 'cross_attn':
-                query, cross_attn_map = self.attentions[attn_index](
+                query, attn_map = self.attentions[attn_index](
                     query,
                     key,
                     value,
@@ -393,6 +393,8 @@ class TMVReidTransformerDecoderLayer(BaseTransformerLayer):
                     attn_mask=attn_masks[attn_index],
                     key_padding_mask=key_padding_mask,
                     **kwargs)
+                if attn_map is not None:
+                    cross_attn_map = attn_map
                 attn_index += 1
                 identity = query
 
@@ -1613,7 +1615,7 @@ class MultiheadSuperAttention2(nn.MultiheadAttention):
         return x
 
 class MultiheadSVAttention(nn.MultiheadAttention):
-    def set_args(self, num_views=3, num_query=900, num_key=300, scale_dot_type='mean', need_weights=False, **kwargs):
+    def set_args(self, num_views=3, num_query=900, num_key=300, scale_dot_type='mean', need_weights=True, **kwargs):
         self.num_views = num_views
         self.num_query = num_query
         self.num_key = num_key
@@ -1621,7 +1623,7 @@ class MultiheadSVAttention(nn.MultiheadAttention):
         self.need_weights = need_weights
 
     def forward(self, query: Tensor, key: Tensor, value: Tensor, key_padding_mask: Optional[Tensor] = None,
-                need_weights: bool = False, attn_mask: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
+                need_weights: bool = True, attn_mask: Optional[Tensor] = None) -> Tuple[Tensor, Optional[Tensor]]:
         r"""
     Args:
         query, key, value: map a query and a set of key-value pairs to an output.

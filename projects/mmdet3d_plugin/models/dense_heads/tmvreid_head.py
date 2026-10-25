@@ -82,6 +82,10 @@ class TMVReidHead(TMVDetHead):
                  idx_emb_size=127,
                  num_classes=10,
                  num_query=900,
+                 query_init='rand',
+                 query_grid_shape=None,
+                 query_mu=0.5,
+                 query_sigma=0.15,
                  position_range=None,
                  det_transformer=None,
                  det_feat_idx=0,
@@ -212,6 +216,10 @@ class TMVReidHead(TMVDetHead):
                 self.sampler = build_sampler(sampler_cfg, context=self)
 
         self.num_query = num_query
+        self.query_init = query_init
+        self.query_grid_shape = query_grid_shape
+        self.query_mu = query_mu
+        self.query_sigma = query_sigma
         self.num_input = num_input
         self.last_timestamp = None
         self.num_classes = num_classes
@@ -309,7 +317,7 @@ class TMVReidHead(TMVDetHead):
 
         if self.det_transformer is not None:
             assert self.loss_bbox is not None
-            query_points = nn.Parameter(torch.rand((num_query, 3)))
+            query_points = nn.Parameter(self._init_query_points(num_query))
             self.register_parameter('query_points', query_points)
 
             num_layers = len(self.det_transformer.det_decoders.layers)
@@ -411,6 +419,42 @@ class TMVReidHead(TMVDetHead):
             self.visible_branch = nn.ModuleList([visible_branch for _ in range(num_layers)])
         else:
             self.visible_branch = nn.ModuleList([deepcopy(visible_branch) for _ in range(num_layers)])
+
+    def _init_query_points(self, num_query):
+        """Initial normalized xyz in [0, 1]^3. Shape (num_query, 3)."""
+        if self.query_init == 'rand':
+            return torch.rand((num_query, 3))
+        if self.query_init == 'grid':
+            return self._grid_query_points(num_query, self.query_grid_shape)
+        if self.query_init == 'gaussian':
+            return self._gaussian_query_points(num_query, self.query_mu, self.query_sigma)
+        raise ValueError(f"query_init must be 'rand', 'grid', or 'gaussian', got {self.query_init}")
+
+    @staticmethod
+    def _grid_query_points(num_query, grid_shape):
+        # Cell centers. 10*10*9 = 900. For a table plane use (30, 30, 1).
+        if grid_shape is None:
+            grid_shape = (10, 10, 9)
+        nx, ny, nz = grid_shape
+        assert nx * ny * nz == num_query, (
+            f'query_grid_shape {grid_shape} has {nx * ny * nz} points, expected {num_query}')
+        xs = (torch.arange(nx, dtype=torch.float32) + 0.5) / nx
+        ys = (torch.arange(ny, dtype=torch.float32) + 0.5) / ny
+        zs = (torch.arange(nz, dtype=torch.float32) + 0.5) / nz
+        xx, yy, zz = torch.meshgrid(xs, ys, zs)
+        return torch.stack([xx, yy, zz], dim=-1).reshape(num_query, 3)
+
+    @staticmethod
+    def _gaussian_query_points(num_query, mu, sigma):
+        # mu, sigma: scalar or length-3 (x, y, z), in normalized pc_range.
+        mu = torch.as_tensor(mu, dtype=torch.float32).reshape(-1)
+        sigma = torch.as_tensor(sigma, dtype=torch.float32).reshape(-1)
+        if mu.numel() == 1:
+            mu = mu.expand(3)
+        if sigma.numel() == 1:
+            sigma = sigma.expand(3)
+        assert mu.numel() == 3 and sigma.numel() == 3
+        return (torch.randn(num_query, 3) * sigma + mu).clamp(0.0, 1.0)
 
     def init_weights(self):
         """Initialize weights of the transformer head."""

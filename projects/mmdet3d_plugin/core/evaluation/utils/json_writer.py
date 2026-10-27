@@ -38,6 +38,19 @@ class Json_writer :
                 self.jm.insert_instance(scene_num, cam_num, inst_idx, cls_idx, x1, y1, x2, y2, prob)
                 self.jm.insert_instance_summary(scene_num, inst_idx, cls_idx)
                 self.jm.insert_reid_prob(scene_num, cam_num, inst_idx, reid_prob)
+                if 'query' in det:
+                    qx, qy = [float(p / self.args.resize_ratio) for p in det['query']]
+                    self.jm.insert_query(scene_num, cam_num, inst_idx, [qx, qy])
+                if 'topk' in det:
+                    topk = []
+                    for item in det['topk']:
+                        kx1, ky1, kx2, ky2 = [round(p / self.args.resize_ratio) for p in (item['x1'], item['y1'], item['x2'], item['y2'])]
+                        topk.append({
+                            'rp_idx': int(item['rp_idx']),
+                            'attn_prob': float(item['attn_prob']),
+                            'pos': [kx1, ky1, kx2, ky2],
+                        })
+                    self.jm.insert_attn(scene_num, cam_num, inst_idx, float(det['attn_prob']), topk)
 
                 if self.args.write_is_valid :
                     #self.jm.insert_is_valid(scene_num, cam_num, inst_idx, det['is_valid'])

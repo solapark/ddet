@@ -164,6 +164,10 @@ class CustomMessytableRpnDataset(CustomMessytableDataset):
                     detection_score=box['cls_score'],
                     query2d=box['query2d'],
                     )
+                if 'topk_attn' in box:
+                    messytable_anno['topk_attn'] = box['topk_attn']
+                    messytable_anno['topk_boxes'] = box['topk_boxes']
+                    messytable_anno['topk_idx'] = box['topk_idx']
                 annos.append(messytable_anno)
             messytable_annos[scene_id] = annos
 
@@ -195,6 +199,10 @@ def output_to_messytable_box(detection):
     labels = detection['labels_mtv2d'].numpy()
     query2ds = detection['query2ds_mtv2d'].numpy()
 
+    topk_scores = detection['topk_scores_mtv2d'].numpy() if 'topk_scores_mtv2d' in detection else None
+    topk_boxes = detection['topk_boxes_mtv2d'].numpy() if topk_scores is not None else None
+    topk_idx = detection['topk_idx_mtv2d'].numpy() if topk_scores is not None else None
+
     box_list = []
     for i in range(len(boxmtv2d)):
         box = dict(
@@ -205,5 +213,9 @@ def output_to_messytable_box(detection):
             cls_score = cls_scores[i],
             query2d = query2ds[i],
             )
+        if topk_scores is not None:
+            box['topk_attn'] = topk_scores[i].tolist()
+            box['topk_boxes'] = topk_boxes[i].tolist()
+            box['topk_idx'] = topk_idx[i].astype(int).tolist()
         box_list.append(box)
     return box_list

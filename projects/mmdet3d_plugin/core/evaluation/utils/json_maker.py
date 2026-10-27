@@ -82,6 +82,14 @@ class json_maker :
     def insert_reid_prob(self, scene, cam, inst, reid_prob) :
         self.json['scenes'][scene]['cameras'][cam]['instances'][inst]['reid_prob'] = reid_prob
 
+    def insert_query(self, scene, cam, inst, query) :
+        self.json['scenes'][scene]['cameras'][cam]['instances'][inst]['query'] = query
+
+    def insert_attn(self, scene, cam, inst, attn_prob, topk) :
+        inst_info = self.json['scenes'][scene]['cameras'][cam]['instances'][inst]
+        inst_info['attn_prob'] = attn_prob
+        inst_info['topk'] = topk
+
     def insert_gt_id(self, scene, cam, inst, gt_id) :
         self.json['scenes'][scene]['cameras'][cam]['instances'][inst]['gt_id'] = gt_id
 

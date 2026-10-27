@@ -1483,7 +1483,7 @@ class TMVReidHead(TMVDetHead):
         """
         #preds_dicts['all_bbox_preds'] = preds_dicts['all_bbox_preds'][..., :10]
         preds_dicts['all_query2ds'] = self.query2d_denorm.transpose(2,1).unsqueeze(0) #(1, 1, 900, 3, 2)
-        preds_dicts = self.bbox_coder.decode(preds_dicts, self.pred_box[0])
+        preds_dicts = self.bbox_coder.decode(preds_dicts, self.pred_box[0], cross_attn2=self.cross_attn2)
         num_samples = len(preds_dicts)
 
         ret_list = []
@@ -1495,7 +1495,9 @@ class TMVReidHead(TMVDetHead):
             cls_scores = preds['cls_scores']
             labels = preds['labels']
             query2ds = preds['query2ds']
-            ret_list.append([bboxes, visibles, reid_scores, cls_scores, labels, query2ds])
+            ret_list.append([
+                bboxes, visibles, reid_scores, cls_scores, labels, query2ds,
+                preds['topk_scores'], preds['topk_boxes'], preds['topk_idx']])
         return ret_list
 
 

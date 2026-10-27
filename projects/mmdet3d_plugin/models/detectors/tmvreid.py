@@ -58,7 +58,8 @@ class TMVReid(VEDet):
         losses.update(losses_pts)
         return losses
 
-    def simple_test(self, img_metas, img=None, gt_map=None, rpn_cxcywh=None, rpn_emb=None, rpn_prob=None, **kwargs):
+    def simple_test(self, img_metas, img=None, gt_map=None, rpn_cxcywh=None, rpn_emb=None, rpn_prob=None,
+                    gt_bboxes_3d=None, gt_labels_3d=None, **kwargs):
         """Test function without augmentaiton."""
         if hasattr(self, 'img_neck'):
             rpn_emb = self.forward_neck(rpn_emb)
@@ -80,7 +81,9 @@ class TMVReid(VEDet):
         if outs.get('all_cls_scores', None) is not None:
             bbox_list = self.pts_bbox_head.get_bboxes(outs, img_metas)
             #bbox_results = [bbox3d2result(bboxes, scores, labels) for bboxes, scores, labels in bbox_list]
-            bbox_results = [bboxmtvreid2result(bboxes, visibles, reid_scores, cls_scores, labels, query2ds) for bboxes, visibles, reid_scores, cls_scores, labels, query2ds in bbox_list] 
+            bbox_results = [bboxmtvreid2result(
+                bboxes, visibles, reid_scores, cls_scores, labels, query2ds, topk_scores, topk_boxes, topk_idx)
+                for bboxes, visibles, reid_scores, cls_scores, labels, query2ds, topk_scores, topk_boxes, topk_idx in bbox_list] 
             results['bbox_results'] = bbox_results
 
         return results

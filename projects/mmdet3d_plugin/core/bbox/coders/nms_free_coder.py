@@ -348,18 +348,27 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
                  num_views=3,
                  reid_score_threshold=None,
                  cls_score_threshold=None,
+                 topk=1,
+                 rank='attention',
+                 random_seed=0
                 ):
         self.max_num = max_num
         self.num_views = num_views
         self.reid_score_threshold = reid_score_threshold
         self.cls_score_threshold = cls_score_threshold
         self.num_classes = num_classes
-        pass
+        self.topk = topk
+        if rank not in ('attention', 'nearest', 'random'):
+            raise ValueError("rank must be 'attention', 'nearest', or 'random'")
+        self.rank = rank
+        self.random_seed = random_seed
+        self._random_generator = torch.Generator()
+        self._random_generator.manual_seed(random_seed)
 
     def encode(self):
         pass
 
-    def decode_single(self, cls_scores, reid_scores, visible_scores, bbox_preds, query2ds):
+    def decode_single(self, cls_scores, reid_scores, visible_scores, bbox_preds, query2ds, topk_scores, topk_boxes, topk_idx):
         """Decode bboxes.
         Args:
             cls_scores (Tensor): Outputs from the classification head, \
@@ -384,6 +393,9 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         visible_scores = visible_scores.sigmoid()[indexs]
         #reid_scores = reid_scores.sigmoid()[indexs]
         query2ds = query2ds[indexs]
+        topk_scores = topk_scores[indexs]
+        topk_boxes = topk_boxes[indexs]
+        topk_idx = topk_idx[indexs]
 
         final_box_preds = bbox_preds
         final_reid_scores = reid_scores
@@ -408,11 +420,32 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         visibles = final_visibles[mask]
         labels = final_preds[mask]
         query2ds = final_query2ds[mask]
-        predictions_dict = {'bboxes': boxes3d, 'reid_scores': reid_scores, 'cls_scores': cls_scores, 'visibles': visibles, 'labels': labels, 'query2ds': query2ds}
+        predictions_dict = {
+            'bboxes': boxes3d,
+            'reid_scores': reid_scores,
+            'cls_scores': cls_scores,
+            'visibles': visibles,
+            'labels': labels,
+            'query2ds': query2ds,
+            'topk_scores': topk_scores[mask],
+            'topk_boxes': topk_boxes[mask],
+            'topk_idx': topk_idx[mask],
+        }
 
         return predictions_dict
 
-    def decode(self, preds_dicts, pred_box):
+    def _rank_score(self, attn, query2d, pred_box):
+        """Higher score is a better RP. Shape matches ``attn``: (query, view, rp)."""
+        if self.rank == 'attention':
+            return attn
+        if self.rank == 'nearest':
+            centers = pred_box[..., :2]
+            delta = query2d[:, :, None, :] - centers.permute(1, 0, 2)[None, :, :, :]
+            return -torch.norm(delta, dim=-1)
+        keys = torch.rand(tuple(attn.shape), generator=self._random_generator)
+        return keys.to(device=attn.device, dtype=attn.dtype)
+
+    def decode(self, preds_dicts, pred_box, cross_attn2=False):
         """Decode bboxes.
         Args:
             all_cls_scores (Tensor): Outputs from the classification head, \
@@ -433,9 +466,24 @@ class TMVReidNMSFreeCoder(BaseBBoxCoder):
         batch_size = all_cls_scores.size()[0]
         predictions_list = []
         for i in range(batch_size):
-            pred_idx_scores, pred_idx = F.softmax(all_idx_scores[i], dim=-1).max(-1) #(900, 3), (900, 3)
-            bbox_preds = get_box_form_pred_idx(pred_box, pred_idx, self.num_views) #(900, 3, 4)
-            predictions_list.append(self.decode_single(all_cls_scores[i], all_reid_scores[i], all_visible_scores[i], bbox_preds, all_query2ds[i]))
+            idx_logits = all_idx_scores[i]
+            if cross_attn2:
+                attn = idx_logits.sigmoid()
+            else:
+                attn = idx_logits.softmax(dim=-1)
+            k_rp = min(self.topk, attn.size(-1))
+            rank_score = self._rank_score(attn, all_query2ds[i], pred_box)
+            topk_scores, topk_idx = torch.topk(rank_score, k_rp, dim=-1)
+            if self.rank == 'nearest':
+                topk_scores = -topk_scores
+            bbox_preds = get_box_form_pred_idx(pred_box, topk_idx[..., 0], self.num_views)
+            num_query, num_views, _ = topk_idx.shape
+            idx_flat = topk_idx.permute(0, 2, 1).reshape(num_query * k_rp, num_views)
+            topk_boxes = get_box_form_pred_idx(pred_box, idx_flat, self.num_views)
+            topk_boxes = topk_boxes.reshape(num_query, k_rp, num_views, 4).permute(0, 2, 1, 3).contiguous()
+            predictions_list.append(self.decode_single(
+                all_cls_scores[i], all_reid_scores[i], all_visible_scores[i], bbox_preds, all_query2ds[i],
+                topk_scores, topk_boxes, topk_idx))
         return predictions_list
 
 
